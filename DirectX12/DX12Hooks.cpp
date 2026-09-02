@@ -94,7 +94,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateCommandQueue(ID3D12Device* d, const D3D
     HRESULT hr = oCreateCommandQueue(d, desc, riid, out);
     if (SUCCEEDED(hr) && out && *out) {
         ID3D12CommandQueue* q = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&q)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&q)))) {
             DX12InstallQueueHooks(q);
             q->Release();
         }
@@ -124,7 +124,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateGraphicsPipelineState(ID3D12Device* d, 
     HRESULT hr = oCreateGraphicsPipelineState(d, &modified, riid, out);
     if (SUCCEEDED(hr) && out && *out) {
         ID3D12PipelineState* pso = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&pso)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&pso)))) {
             rt->OnGraphicsPipelineCreated(desc, pso, originalHash);
             pso->Release();
         }
@@ -146,7 +146,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateComputePipelineState(ID3D12Device* d, c
     HRESULT hr = oCreateComputePipelineState(d, &modified, riid, out);
     if (SUCCEEDED(hr) && out && *out) {
         ID3D12PipelineState* pso = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&pso)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&pso)))) {
             rt->OnComputePipelineCreated(desc, pso, rt->HashShader(desc->CS.pShaderBytecode, desc->CS.BytecodeLength));
             pso->Release();
         }
@@ -159,7 +159,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateCommandList(ID3D12Device* d, UINT node,
     HRESULT hr = oCreateCommandList(d, node, type, a, p, riid, out);
     if (SUCCEEDED(hr) && out && *out) {
         ID3D12GraphicsCommandList* list = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&list)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&list)))) {
             DX12InstallCommandListHooks(list);
             GetDX12Runtime()->TrackSetPipelineState(list, p);
             list->Release();
@@ -173,7 +173,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateCommandList1(ID3D12Device* d, UINT node
     HRESULT hr = oCreateCommandList1(d, node, type, flags, riid, out);
     if (SUCCEEDED(hr) && out && *out) {
         ID3D12GraphicsCommandList* list = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&list)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&list)))) {
             DX12InstallCommandListHooks(list);
             list->Release();
         }
@@ -186,7 +186,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateCommittedResource(ID3D12Device* d, cons
     HRESULT hr = oCreateCommittedResource(d, hp, hf, desc, state, clear, riid, out);
     if (!g_dx12Internal && SUCCEEDED(hr) && out && *out) {
         ID3D12Resource* resource = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
             GetDX12Runtime()->RegisterResource(resource, state);
             resource->Release();
         }
@@ -199,7 +199,7 @@ static HRESULT STDMETHODCALLTYPE hkCreatePlacedResource(ID3D12Device* d, ID3D12H
     HRESULT hr = oCreatePlacedResource(d, heap, offset, desc, state, clear, riid, out);
     if (!g_dx12Internal && SUCCEEDED(hr) && out && *out) {
         ID3D12Resource* resource = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
             GetDX12Runtime()->RegisterResource(resource, state);
             resource->Release();
         }
