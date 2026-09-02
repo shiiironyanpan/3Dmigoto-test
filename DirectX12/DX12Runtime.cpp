@@ -684,7 +684,7 @@ const DX12Runtime::TextureOverride* DX12Runtime::FindMatchingOverride(const Pipe
         if (!indexed && o.hasMatchFirstVertex && o.matchFirstVertex != first) continue;
         if (indexed && o.hasMatchVertexCount && o.matchVertexCount != count) continue;
         if (!indexed && o.hasMatchVertexCount && o.matchVertexCount != count) continue;
-        if (o.hasMatchFirstInstance && o.matchFirstInstance != firstInstance) continue;
+        if (o.hasMatchInstance && o.matchFirstInstance != firstInstance) continue;
         if (o.hasMatchInstanceCount && o.matchInstanceCount != instanceCount) continue;
         return &o;
     }
@@ -736,7 +736,7 @@ bool DX12Runtime::ApplyIndexOverrideForDraw(ID3D12GraphicsCommandList* list, UIN
     for (const TextureOverride& o : m_textureOverrides) {
         if (!PipelineMatchesHash(pit->second, o.hash)) continue;
         if (o.hasMatchFirstIndex && o.matchFirstIndex != firstIndex) continue;
-        if (o.hasMatchFirstInstance && o.matchFirstInstance != firstInstance) continue;
+        if (o.hasMatchInstance && o.matchFirstInstance != firstInstance) continue;
         if (o.hasMatchInstanceCount && o.matchInstanceCount != instanceCount) continue;
         if (!o.hasIB) continue;
         if (!EnsureResourceLoaded(o.ib)) continue;
@@ -773,7 +773,7 @@ bool DX12Runtime::ShouldSkipDraw(ID3D12GraphicsCommandList* list, bool indexed, 
         if (!PipelineMatchesHash(p, o.hash)) continue;
         if (indexed && o.hasMatchFirstIndex && o.matchFirstIndex != first) continue;
         if (!indexed && o.hasMatchFirstVertex && o.matchFirstVertex != first) continue;
-        if (o.hasMatchFirstInstance && o.matchFirstInstance != firstInstance) continue;
+        if (o.hasMatchInstance && o.matchFirstInstance != firstInstance) continue;
         if (o.hasMatchInstanceCount && o.matchInstanceCount != instanceCount) continue;
         customDraw |= indexed ? o.hasDrawIndexed : o.hasDraw;
         if (o.skip) skip = true;

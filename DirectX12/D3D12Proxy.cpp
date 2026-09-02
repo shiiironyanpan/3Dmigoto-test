@@ -1,5 +1,26 @@
 #include <windows.h>
+
+// d3d12.h declares these API entry points with DLL-import linkage. This file implements
+// proxy exports with the same public names, so hide the imported declarations while the
+// header is parsed to avoid C2375 "redefinition; different linkage" errors.
+#define D3D12CreateDevice D3D12CreateDevice_Imported
+#define D3D12GetDebugInterface D3D12GetDebugInterface_Imported
+#define D3D12SerializeRootSignature D3D12SerializeRootSignature_Imported
+#define D3D12SerializeVersionedRootSignature D3D12SerializeVersionedRootSignature_Imported
+#define D3D12CreateRootSignatureDeserializer D3D12CreateRootSignatureDeserializer_Imported
+#define D3D12CreateVersionedRootSignatureDeserializer D3D12CreateVersionedRootSignatureDeserializer_Imported
+#define D3D12EnableExperimentalFeatures D3D12EnableExperimentalFeatures_Imported
+#define D3D12GetInterface D3D12GetInterface_Imported
 #include <d3d12.h>
+#undef D3D12CreateDevice
+#undef D3D12GetDebugInterface
+#undef D3D12SerializeRootSignature
+#undef D3D12SerializeVersionedRootSignature
+#undef D3D12CreateRootSignatureDeserializer
+#undef D3D12CreateVersionedRootSignatureDeserializer
+#undef D3D12EnableExperimentalFeatures
+#undef D3D12GetInterface
+
 #include <string>
 #include "DX12Runtime.h"
 #include "DX12Hooks.h"
