@@ -69,7 +69,7 @@ HRESULT WINAPI D3D12CreateDevice(IUnknown* adapter, D3D_FEATURE_LEVEL minimumFea
     HRESULT hr = reinterpret_cast<Fn>(g_realCreateDevice)(adapter, minimumFeatureLevel, riid, ppDevice);
     if (SUCCEEDED(hr) && ppDevice && *ppDevice) {
         ID3D12Device* device = nullptr;
-        if (SUCCEEDED((*ppDevice)->QueryInterface(IID_PPV_ARGS(&device)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppDevice)->QueryInterface(IID_PPV_ARGS(&device)))) {
             DX12Runtime::Instance().Initialize(device);
             DX12InstallDeviceHooks(device);
             device->Release();

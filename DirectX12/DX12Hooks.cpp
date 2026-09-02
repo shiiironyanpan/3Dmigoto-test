@@ -212,7 +212,7 @@ static HRESULT STDMETHODCALLTYPE hkCreateReservedResource(ID3D12Device* d, const
     HRESULT hr = oCreateReservedResource(d, desc, state, clear, riid, out);
     if (!g_dx12Internal && SUCCEEDED(hr) && out && *out) {
         ID3D12Resource* resource = nullptr;
-        if (SUCCEEDED((*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&resource)))) {
             GetDX12Runtime()->RegisterResource(resource, state);
             resource->Release();
         }
