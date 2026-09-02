@@ -197,6 +197,10 @@ Global
 		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Release|Win32.Build.0 = Release|Win32
 		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Release|x64.ActiveCfg = Release|x64
 		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Release|x64.Build.0 = Release|x64
+		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Zip Release|Win32.ActiveCfg = Zip Release|Win32
+		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Zip Release|Win32.Build.0 = Zip Release|Win32
+		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Zip Release|x64.ActiveCfg = Zip Release|x64
+		{D12C7A32-7A0D-4F0E-9D9B-4B0A1F9C1201}.Zip Release|x64.Build.0 = Zip Release|x64
 EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
