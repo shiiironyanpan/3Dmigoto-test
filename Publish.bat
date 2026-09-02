@@ -83,7 +83,7 @@ echo(
 echo(
 echo === Building Win32 target ===
 echo(
-MSBUILD /M StereoVisionHacks.sln  /p:Configuration="Zip Release" /p:Platform=Win32 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0.19041.0 /v:minimal /target:rebuild
+MSBUILD /M StereoVisionHacks.sln  /p:Configuration="Zip Release" /p:Platform=Win32 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0.22621.0 /v:minimal /target:rebuild
 IF %ERRORLEVEL% NEQ 0 (
 	Echo *** x32 BUILD FAIL ***  
 	Echo   Result: %ERRORLEVEL% 
@@ -93,7 +93,7 @@ echo(
 echo(
 echo === Building x64 target ===
 echo(
-MSBUILD /M StereoVisionHacks.sln  /p:Configuration="Zip Release" /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0.19041.0 /v:minimal /target:rebuild
+MSBUILD /M StereoVisionHacks.sln  /p:Configuration="Zip Release" /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0.22621.0 /v:minimal /target:rebuild
 IF %ERRORLEVEL% NEQ 0 (
 	Echo *** x64 BUILD FAIL ***  
 	Echo   Result: %ERRORLEVEL% 
