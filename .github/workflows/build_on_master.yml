@@ -1,0 +1,44 @@
+# Build 3Dmigoto automatically whenever master changes.
+# This is a CI validation build only.
+# It does not create releases or modify the repository.
+
+name: Build on Master Push
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    name: Build 3Dmigoto
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+
+      - name: Show Visual Studio installation
+        shell: cmd
+        run: |
+          echo === Visual Studio installations ===
+          "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -all
+          echo(
+          echo === Installed MSVC toolsets ===
+          dir "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC"
+          dir "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC"
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build
+        shell: cmd
+        run: |
+          call .\Publish.bat RELEASE
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3Dmigoto-master-${{ github.sha }}
+          path: Zip Release\
+          if-no-files-found: error
