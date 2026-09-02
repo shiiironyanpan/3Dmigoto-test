@@ -7,6 +7,13 @@
 #include <vector>
 
 CNktHookLib g_dx12Hooks;
+
+// DX12 is built as a standalone proxy DLL and does not link the DX11 translation
+// unit (D3D11Wrapper.cpp) that normally owns these logging globals. Keep the
+// shared log.h interface valid for DX12 without introducing a dependency on DX11.
+FILE* LogFile = nullptr;
+bool gLogDebug = false;
+
 thread_local bool g_dx12Internal = false;
 
 namespace {
