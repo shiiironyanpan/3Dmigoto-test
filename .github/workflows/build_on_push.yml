@@ -1,0 +1,80 @@
+name: Build 3Dmigoto (including DirectX 12)
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build x86/x64 and DirectX 12
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build standard 3Dmigoto packages
+        shell: cmd
+        run: call .\Publish.bat
+
+      - name: Build DirectX 12 proxy (x64)
+        shell: cmd
+        run: >
+          msbuild DirectX12\DirectX12.vcxproj
+          /m
+          /t:Rebuild
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:PlatformToolset=v143
+          /p:WindowsTargetPlatformVersion=10.0.19041.0
+          /p:SolutionDir=%GITHUB_WORKSPACE%\\
+          /v:minimal
+
+      - name: Assemble DirectX 12 package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $PWD 'builds\x64\Release'
+          $destination = Join-Path $PWD 'Zip Release\DirectX12'
+
+          if (-not (Test-Path (Join-Path $source 'd3d12.dll'))) {
+            throw "DirectX 12 build succeeded but builds\x64\Release\d3d12.dll was not found."
+          }
+
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item (Join-Path $source 'd3d12.dll') $destination -Force
+          Copy-Item 'DirectX12\d3dx.ini' $destination -Force
+          Copy-Item 'DirectX12\README_DX12.md' $destination -Force
+
+          foreach ($folder in @('Mods', 'ShaderFixes')) {
+            $from = Join-Path 'DirectX12' $folder
+            if (Test-Path $from) {
+              Copy-Item $from $destination -Recurse -Force
+            }
+          }
+
+          Write-Host 'DirectX 12 package contents:'
+          Get-ChildItem $destination -Recurse | Select-Object FullName
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3Dmigoto-build-${{ github.sha }}
+          path: |
+            Zip Release/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
