@@ -1,0 +1,19 @@
+LIBRARY d3d12
+EXPORTS
+    D3D12CreateDevice = My_D3D12CreateDevice
+    D3D12GetDebugInterface = Fwd_D3D12GetDebugInterface
+    D3D12SerializeRootSignature = Fwd_D3D12SerializeRootSignature
+    D3D12SerializeVersionedRootSignature = Fwd_D3D12SerializeVersionedRootSignature
+    D3D12CreateRootSignatureDeserializer = Fwd_D3D12CreateRootSignatureDeserializer
+    D3D12CreateVersionedRootSignatureDeserializer = Fwd_D3D12CreateVersionedRootSignatureDeserializer
+    D3D12EnableExperimentalFeatures = Fwd_D3D12EnableExperimentalFeatures
+    D3D12GetInterface = Fwd_D3D12GetInterface
+    D3D12CoreCreateLayeredDevice = Fwd_D3D12CoreCreateLayeredDevice
+    D3D12CoreGetLayeredDeviceSize = Fwd_D3D12CoreGetLayeredDeviceSize
+    D3D12CoreRegisterLayeredDevice = Fwd_D3D12CoreRegisterLayeredDevice
+    D3D12PIXEventsReplaceBlock = Fwd_D3D12PIXEventsReplaceBlock
+    D3D12PIXGetThreadInfo = Fwd_D3D12PIXGetThreadInfo
+    D3D12PIXNotifyWakeFromFenceSignal = Fwd_D3D12PIXNotifyWakeFromFenceSignal
+    D3D12PIXReportCounter = Fwd_D3D12PIXReportCounter
+    GetBehaviorValue = Fwd_GetBehaviorValue
+    SetAppCompatStringPointer = Fwd_SetAppCompatStringPointer
