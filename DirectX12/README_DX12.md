@@ -128,10 +128,23 @@ Shader hashes are `fnv64` of the whole bytecode blob — the same function as DX
   `RASTERIZER1/2`): parsing stops at those, shaders after them are not seen.
 * Enhanced-barrier / Agility SDK features beyond `CreateCommittedResource3` creation.
 
+## Swap chain handling (changed in v0.1.1)
+
+v0.1 patched the shared `IDXGISwapChain` vtable. On a real game (RE4 Remake with the Steam overlay
+and REFramework loaded) that produced an endless `Present -> overlay -> Present` recursion and a
+stack overflow, because three pieces of software ended up hooking the same call chain. Since v0.1.1
+the game receives a **proxy swap chain object** (like the DX11 3DMigoto does); the proxy calls the
+real swap chain through its untouched vtable, so no other hook can call back into us. Only swap
+chains created for a D3D12 command queue are proxied.
+
 ## Troubleshooting
 
-* Game does not start / crashes immediately: remove `d3d12.dll`, and check `d3d12_log.txt`
-  (a vtable index mismatch is logged as `vtable index for … decoded as …`).
+* Game does not start / crashes: open `d3d12_log.txt`. Fatal exceptions are logged there with a
+  module+offset back trace (`==== FATAL EXCEPTION …`). Then bisect with the `[DX12] hook_*`
+  switches in `d3dx.ini` (turn groups off one at a time). A **Release** build is recommended;
+  the Debug build is much slower and adds stack fill / JMC overhead.
+* A vtable index mismatch is logged as `vtable index for … decoded as …` (harmless, the decoded
+  value is used).
 * Nothing hunts: look for `no CPU-side data` notes — the game uploads meshes in a way the
   shadow copy does not see; send the log.
 * Overlay missing: the overlay is a separate click-through window and needs windowed or

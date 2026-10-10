@@ -204,6 +204,13 @@ struct Settings {
 	bool debug_log = false;
 	std::string analyse_options;
 	bool fa_dump_vb = true, fa_dump_ib = true, fa_dump_shaders = true, fa_dedupe = true;
+	// Bisect switches ([DX12] section) to turn individual hook groups off when diagnosing a crash
+	bool hook_present = true;       // swap chain proxy (frame boundary, input, hunting, frame analysis)
+	bool hook_resources = true;     // resource creation / Map / Unmap tracking and shadow copies
+	bool hook_release = true;       // IUnknown::Release hook on resources (frees tracking data)
+	bool hook_pipeline = true;      // pipeline state creation (shader hashes / replacement / layouts)
+	bool hook_commandlists = true;  // command list hooks (draws, bindings, copies)
+	int hash_sample_threshold_kb = 4096; // views bigger than this are hashed from samples, not fully
 };
 
 class Config {

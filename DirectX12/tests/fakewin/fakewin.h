@@ -99,3 +99,16 @@ BOOL InvalidateRect(HWND, const RECT*, BOOL); BOOL IsWindow(HWND); BOOL IsIconic
 FILE* _wfsopen(const wchar_t*, const wchar_t*, int); int wcscat_s(wchar_t*, size_t, const wchar_t*);
 HRESULT CreateDXGIFactory1(const GUID&, void**);
 }
+typedef unsigned short USHORT; typedef long LONG;
+#define EXCEPTION_CONTINUE_SEARCH 0
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 4
+#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 2
+struct EXCEPTION_RECORD { DWORD ExceptionCode; void* ExceptionAddress; DWORD NumberParameters; uint64_t ExceptionInformation[15]; };
+struct EXCEPTION_POINTERS { EXCEPTION_RECORD* ExceptionRecord; void* ContextRecord; };
+typedef LONG (*PVECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS*);
+extern "C" {
+void* AddVectoredExceptionHandler(ULONG, PVECTORED_EXCEPTION_HANDLER);
+BOOL GetModuleHandleExW(DWORD, LPCWSTR, HMODULE*);
+USHORT CaptureStackBackTrace(DWORD, DWORD, void**, DWORD*);
+LONG InterlockedExchange(volatile LONG*, LONG); DWORD GetCurrentThreadId();
+}

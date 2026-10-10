@@ -78,7 +78,7 @@ std::wstring WidenUtf8(const std::string &s)
 	return w;
 }
 
-static std::string Narrow(const std::wstring &w)
+std::string Narrow(const std::wstring &w)
 {
 	if (w.empty())
 		return "";
@@ -146,6 +146,51 @@ bool HookPoint::Install(void **vtbl, int index, void *hook)
 
 } // namespace mig12
 
+
+// ---------------------------------------------------------------------------------
+// Crash diagnostics: logs fatal exceptions with a module+offset back trace to d3d12_log.txt
+// ---------------------------------------------------------------------------------
+static std::string ModuleOf(void *addr, size_t *offset)
+{
+	HMODULE m = nullptr;
+	if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)addr, &m) && m) {
+		wchar_t path[MAX_PATH] = {};
+		GetModuleFileNameW(m, path, MAX_PATH);
+		std::wstring w = path;
+		size_t s = w.find_last_of(L"\\/");
+		if (offset)
+			*offset = (size_t)((uint8_t *)addr - (uint8_t *)m);
+		return mig12::Narrow(s == std::wstring::npos ? w : w.substr(s + 1));
+	}
+	if (offset)
+		*offset = 0;
+	return "?";
+}
+
+static LONG WINAPI CrashLogger(EXCEPTION_POINTERS *ep)
+{
+	DWORD code = ep->ExceptionRecord->ExceptionCode;
+	if (code != 0xC0000005 && code != 0xC00000FD && code != 0xC000001D && code != 0xC0000094 && code != 0xC0000096)
+		return EXCEPTION_CONTINUE_SEARCH;
+	static LONG once = 0;
+	if (InterlockedExchange(&once, 1))
+		return EXCEPTION_CONTINUE_SEARCH;
+	size_t off = 0;
+	std::string mod = ModuleOf(ep->ExceptionRecord->ExceptionAddress, &off);
+	LOG("\n==== FATAL EXCEPTION 0x%08lx at %p (%s+0x%zx) thread %lu ====\n", code, ep->ExceptionRecord->ExceptionAddress, mod.c_str(), off, GetCurrentThreadId());
+	if (code == 0xC0000005 && ep->ExceptionRecord->NumberParameters >= 2)
+		LOG("access violation: %s address %p\n", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading", (void *)ep->ExceptionRecord->ExceptionInformation[1]);
+	void *frames[48] = {};
+	USHORT n = CaptureStackBackTrace(0, 48, frames, nullptr);
+	for (USHORT i = 0; i < n; i++) {
+		size_t o = 0;
+		std::string m = ModuleOf(frames[i], &o);
+		LOG("  #%02u %s+0x%zx\n", (unsigned)i, m.c_str(), o);
+	}
+	LOG("==== end of crash report ====\n");
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // ---------------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------------
@@ -162,6 +207,7 @@ static void InitOnce()
 	g_ini_dir = Narrow(dir);
 
 	LogOpen(g_ini_dir + "\\d3d12_log.txt");
+	AddVectoredExceptionHandler(1, CrashLogger);
 	LOG("3DMigoto DX12 (modding build) starting\n");
 	LOG("Module directory: %s\n", g_ini_dir.c_str());
 	wchar_t exe[MAX_PATH] = {};
@@ -191,7 +237,7 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
 {
 	if (reason == DLL_PROCESS_ATTACH) {
 		g_self = hInst;
-		DisableThreadLibraryCalls(hInst);
+		// NOTE: no DisableThreadLibraryCalls here - it must not be used with the static CRT.
 
 		wchar_t sys[MAX_PATH] = {};
 		GetSystemDirectoryW(sys, MAX_PATH);

@@ -156,6 +156,31 @@ int main()
 	bool saw6 = false; for (auto& c : g_calls) if (c == "DrawIndexed 6,1,0,0") saw6 = true; assert(saw6);
 	printf("branching OK\n");
 
+	// ---- 4b) pooled 16 MB buffer: sampled hash must be fast, stable and react to writes inside a sampled window
+	{
+		FakeRes pool; pool.va = 0x40000000; pool.d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; pool.d.Width = 16u << 20; pool.mem.resize(16u << 20);
+		D3D12_RESOURCE_DESC pd = pool.d; TrackResource(&pool, pd, false);
+		FakeRes src; src.va = 0x50000000; src.d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; src.d.Width = 4096; src.mem.assign(4096, 0x5A);
+		D3D12_RESOURCE_DESC sd = src.d; TrackResource(&src, sd, true); g_res[&src]->mapped = src.mem.data(); g_res[&src]->map_count = 1;
+		Hook_CopyBufferRegion(cl, &pool, 0, &src, 0, 4096);
+		bool k1 = false, st1 = false;
+		uint32_t h1 = HashBufferRange(pool.va, 16u << 20, &k1, &st1);
+		uint32_t h1b = HashBufferRange(pool.va, 16u << 20, nullptr);
+		assert(k1 && st1 && h1 == h1b);
+		src.mem.assign(4096, 0x77);
+		Hook_CopyBufferRegion(cl, &pool, 0, &src, 0, 4096);       // inside the first sampled window -> cache entry invalidated
+		uint32_t h2 = HashBufferRange(pool.va, 16u << 20, nullptr);
+		assert(h2 != h1);
+		// a mesh-sized sub range of the same pool is hashed exactly (not sampled)
+		uint32_t hs = HashBufferRange(pool.va, 4096, nullptr);
+		assert(hs == crc32c(0, src.mem.data(), 4096));
+		// dynamic upload buffer (mapped, no shadow): hashable but not "stable" (hunting must ignore it)
+		FakeRes dyn; dyn.va = 0x60000000; dyn.d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; dyn.d.Width = 256; dyn.mem.assign(256, 1);
+		D3D12_RESOURCE_DESC dd = dyn.d; TrackResource(&dyn, dd, true); g_res[&dyn]->mapped = dyn.mem.data(); g_res[&dyn]->map_count = 1;
+		bool kd = false, sd2 = true; HashBufferRange(dyn.va, 256, &kd, &sd2); assert(kd && !sd2);
+		printf("pooled/sampled/dynamic hashing OK\n");
+	}
+
 	// ---- 5) frame analysis writes DX11-compatible files
 	FA_Request(); FA_StartIfRequested(); assert(FA_Active());
 	cfg.GetVar("mode", false)->v = 1; g_overrides_present = false; g_calls.clear();

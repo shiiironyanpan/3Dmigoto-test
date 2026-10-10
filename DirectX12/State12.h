@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <dxgi1_5.h>
 #ifdef _MSC_VER
 #include <share.h>
 #endif
@@ -132,6 +133,7 @@ struct ResInfo {
 	struct HEnt {
 		uint64_t off, size;
 		uint32_t ver, hash;
+		bool known;
 	};
 	std::unordered_map<uint64_t, HEnt> hash_cache;
 };
@@ -177,12 +179,13 @@ extern int g_bb_width, g_bb_height;
 void InitHooksOnce(const std::string &ini_dir);
 void HookDevice(IUnknown *device);
 bool FetchBufferBytes(uint64_t va, uint64_t size, std::vector<uint8_t> &out);
-uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known);
+uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known, bool *stable = nullptr);
 bool GetShaderBytes(uint64_t hash, std::vector<uint8_t> &out);
 bool EnsureGpuResource(CustomResource *r);
 void ReloadConfig();
 bool WriteFileBytes(const std::string &path, const void *data, size_t n);
 std::wstring WidenUtf8(const std::string &s);
+std::string Narrow(const std::wstring &w);
 
 // FrameAnalysis12.cpp
 struct FADraw {

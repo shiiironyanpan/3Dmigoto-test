@@ -69,13 +69,44 @@ struct ID3D12Device4 : ID3D12Device2 { virtual HRESULT CreateCommandList1(UINT, 
 	virtual HRESULT CreateCommittedResource1(const D3D12_HEAP_PROPERTIES*, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC*, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE*, void*, REFIID, void**) = 0; };
 // ---- DXGI
 #define DXGI_PRESENT_TEST 0x1
+typedef const GUID& REFGUID;
+inline bool operator==(const GUID& a, const GUID& b) { return !memcmp(&a, &b, sizeof(GUID)); }
+#define S_OK ((HRESULT)0)
+#define E_POINTER ((HRESULT)0x80004003)
+#define E_NOINTERFACE ((HRESULT)0x80004002)
 struct DXGI_RATIONAL { UINT n, d; };
 struct DXGI_MODE_DESC { UINT Width, Height; DXGI_RATIONAL r; DXGI_FORMAT Format; };
 struct DXGI_SWAP_CHAIN_DESC { DXGI_MODE_DESC BufferDesc; UINT BufferCount; HWND OutputWindow; };
 struct DXGI_SWAP_CHAIN_DESC1 { UINT Width; }; struct DXGI_SWAP_CHAIN_FULLSCREEN_DESC { UINT a; }; struct DXGI_PRESENT_PARAMETERS { UINT a; };
+struct DXGI_FRAME_STATISTICS { UINT a; }; struct DXGI_RGBA { float r, g, b, a; }; struct DXGI_MATRIX_3X2_F { float m[6]; };
+enum DXGI_MODE_ROTATION { DXGI_MODE_ROTATION_UNSPECIFIED }; enum DXGI_COLOR_SPACE_TYPE { DXGI_COLOR_SPACE_RESERVED }; enum DXGI_HDR_METADATA_TYPE { DXGI_HDR_METADATA_TYPE_NONE };
 struct IDXGIOutput : IUnknown {};
-struct IDXGISwapChain : IUnknown { virtual HRESULT Present(UINT, UINT) = 0; virtual HRESULT ResizeBuffers(UINT, UINT, UINT, DXGI_FORMAT, UINT) = 0; virtual HRESULT GetDesc(DXGI_SWAP_CHAIN_DESC*) = 0; };
-struct IDXGISwapChain1 : IDXGISwapChain { virtual HRESULT Present1(UINT, UINT, const DXGI_PRESENT_PARAMETERS*) = 0; };
-struct IDXGIFactory : IUnknown { virtual HRESULT CreateSwapChain(IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**) = 0; };
+struct IDXGIObject : IUnknown {
+	virtual HRESULT SetPrivateData(REFGUID, UINT, const void*) = 0; virtual HRESULT SetPrivateDataInterface(REFGUID, const IUnknown*) = 0;
+	virtual HRESULT GetPrivateData(REFGUID, UINT*, void*) = 0; virtual HRESULT GetParent(REFIID, void**) = 0; };
+struct IDXGIDeviceSubObject : IDXGIObject { virtual HRESULT GetDevice(REFIID, void**) = 0; };
+struct IDXGISwapChain : IDXGIDeviceSubObject {
+	virtual HRESULT Present(UINT, UINT) = 0; virtual HRESULT GetBuffer(UINT, REFIID, void**) = 0;
+	virtual HRESULT SetFullscreenState(BOOL, IDXGIOutput*) = 0; virtual HRESULT GetFullscreenState(BOOL*, IDXGIOutput**) = 0;
+	virtual HRESULT GetDesc(DXGI_SWAP_CHAIN_DESC*) = 0; virtual HRESULT ResizeBuffers(UINT, UINT, UINT, DXGI_FORMAT, UINT) = 0;
+	virtual HRESULT ResizeTarget(const DXGI_MODE_DESC*) = 0; virtual HRESULT GetContainingOutput(IDXGIOutput**) = 0;
+	virtual HRESULT GetFrameStatistics(DXGI_FRAME_STATISTICS*) = 0; virtual HRESULT GetLastPresentCount(UINT*) = 0; };
+struct IDXGISwapChain1 : IDXGISwapChain {
+	virtual HRESULT GetDesc1(DXGI_SWAP_CHAIN_DESC1*) = 0; virtual HRESULT GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC*) = 0;
+	virtual HRESULT GetHwnd(HWND*) = 0; virtual HRESULT GetCoreWindow(REFIID, void**) = 0;
+	virtual HRESULT Present1(UINT, UINT, const DXGI_PRESENT_PARAMETERS*) = 0; virtual BOOL IsTemporaryMonoSupported() = 0;
+	virtual HRESULT GetRestrictToOutput(IDXGIOutput**) = 0; virtual HRESULT SetBackgroundColor(const DXGI_RGBA*) = 0;
+	virtual HRESULT GetBackgroundColor(DXGI_RGBA*) = 0; virtual HRESULT SetRotation(DXGI_MODE_ROTATION) = 0; virtual HRESULT GetRotation(DXGI_MODE_ROTATION*) = 0; };
+struct IDXGISwapChain2 : IDXGISwapChain1 {
+	virtual HRESULT SetSourceSize(UINT, UINT) = 0; virtual HRESULT GetSourceSize(UINT*, UINT*) = 0;
+	virtual HRESULT SetMaximumFrameLatency(UINT) = 0; virtual HRESULT GetMaximumFrameLatency(UINT*) = 0;
+	virtual HANDLE GetFrameLatencyWaitableObject() = 0; virtual HRESULT SetMatrixTransform(const DXGI_MATRIX_3X2_F*) = 0; virtual HRESULT GetMatrixTransform(DXGI_MATRIX_3X2_F*) = 0; };
+struct IDXGISwapChain3 : IDXGISwapChain2 {
+	virtual UINT GetCurrentBackBufferIndex() = 0; virtual HRESULT CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE, UINT*) = 0;
+	virtual HRESULT SetColorSpace1(DXGI_COLOR_SPACE_TYPE) = 0;
+	virtual HRESULT ResizeBuffers1(UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*) = 0; };
+struct IDXGISwapChain4 : IDXGISwapChain3 { virtual HRESULT SetHDRMetaData(DXGI_HDR_METADATA_TYPE, UINT, void*) = 0; };
+struct IDXGIFactory : IDXGIObject { virtual HRESULT CreateSwapChain(IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**) = 0; };
 struct IDXGIFactory1 : IDXGIFactory {};
 struct IDXGIFactory2 : IDXGIFactory1 { virtual HRESULT CreateSwapChainForHwnd(IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**) = 0; };
+struct ID3D12CommandQueue : ID3D12Object {};

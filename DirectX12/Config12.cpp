@@ -882,6 +882,8 @@ void Config::ParseCommands(CommandList &cl, const IniSection &sec)
 			std::shared_ptr<RunCmd> c(new RunCmd());
 			if (!t) {
 				std::string lv = lower(val);
+				if (lv.compare(0, 18, "builtincommandlist") == 0)
+					continue; // DX11 built-in command lists have no DX12 equivalent; silently ignored
 				if (lv.compare(0, 12, "customshader") == 0 || lv.compare(0, 19, "builtincustomshader") == 0)
 					warn("[" + sec.name + "] custom shaders are not supported in the DX12 build: " + raw);
 				else
@@ -1031,6 +1033,12 @@ void Config::ParseSettings(const IniSection &sec)
 			else if (k == "log") settings.log_enabled = atoi(v.c_str()) != 0;
 			else if (k == "analyse_options") settings.analyse_options = lower(v);
 			else if (k == "fa_dedupe") settings.fa_dedupe = atoi(v.c_str()) != 0;
+			else if (k == "hook_present") settings.hook_present = atoi(v.c_str()) != 0;
+			else if (k == "hook_resources") settings.hook_resources = atoi(v.c_str()) != 0;
+			else if (k == "hook_release") settings.hook_release = atoi(v.c_str()) != 0;
+			else if (k == "hook_pipeline") settings.hook_pipeline = atoi(v.c_str()) != 0;
+			else if (k == "hook_commandlists") settings.hook_commandlists = atoi(v.c_str()) != 0;
+			else if (k == "hash_sample_threshold_kb") settings.hash_sample_threshold_kb = atoi(v.c_str());
 		}
 	}
 	if (sec.lname == "hunting" && !settings.analyse_options.empty()) {}

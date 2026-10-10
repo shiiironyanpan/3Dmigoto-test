@@ -164,6 +164,14 @@ static std::mutex g_hunt_mu;
 
 static void Visit(HuntKind k, uint64_t h)
 {
+	if (g_hunt[k].visited.size() >= 50000) {
+		static bool warned = false;
+		if (!warned) {
+			warned = true;
+			LOG("WARNING: more than 50000 distinct hunted items of one kind; ignoring new ones\n");
+		}
+		return;
+	}
 	if (g_hunt[k].visited.insert(h).second)
 		g_hunt[k].dirty = true;
 }
@@ -328,6 +336,7 @@ static bool GameHasFocus()
 }
 
 static std::atomic<bool> g_reload_requested{ false };
+static bool g_present_enabled = true;
 
 static void PollInput()
 {
@@ -385,16 +394,15 @@ static void PollInput()
 }
 
 // =====================================================================================
-// Swap chain hooks
+// Swap chain proxy
+//
+// The first version patched the shared IDXGISwapChain vtable. Other software in the process
+// (Steam overlay, REFramework, ...) hooks the very same Present function / vtable slot, and
+// the combination ended in an endless Present -> overlay -> Present recursion (stack overflow).
+// So instead of patching anything shared we hand the game a *proxy object* (exactly what the
+// DX11 3DMigoto does with HackerSwapChain). The proxy calls the real swap chain through its own,
+// untouched vtable, so no other hooker can ever call back into us.
 // =====================================================================================
-typedef HRESULT(STDMETHODCALLTYPE *PFN_Present)(IDXGISwapChain *, UINT, UINT);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_Present1)(IDXGISwapChain1 *, UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_ResizeBuffers)(IDXGISwapChain *, UINT, UINT, UINT, DXGI_FORMAT, UINT);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateSwapChain)(IDXGIFactory *, IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateSwapChainForHwnd)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
-
-static HookPoint hp_Present, hp_Present1, hp_ResizeBuffers, hp_CreateSwapChain, hp_CreateSwapChainForHwnd;
-static int g_idx_Present = 8, g_idx_Present1 = 22, g_idx_ResizeBuffers = 13;
 static thread_local int t_present_depth = 0;
 
 void OnPresentBegin(IDXGISwapChain *sc)
@@ -453,86 +461,204 @@ void OnPresentEnd(IDXGISwapChain *)
 	}
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *self, UINT sync, UINT flags)
-{
-	bool outer = (t_present_depth++ == 0) && !(flags & DXGI_PRESENT_TEST);
-	if (outer)
-		OnPresentBegin(self);
-	HRESULT hr = ((PFN_Present)hp_Present.Orig(self))(self, sync, flags);
-	if (outer)
-		OnPresentEnd(self);
-	t_present_depth--;
-	return hr;
-}
+class SwapChainProxy final : public IDXGISwapChain4 {
+public:
+	explicit SwapChainProxy(IDXGISwapChain *real) : r0_(real)
+	{
+		// the reference we were handed belongs to the proxy
+		real->QueryInterface(__uuidof(IDXGISwapChain1), (void **)&r1_);
+		real->QueryInterface(__uuidof(IDXGISwapChain2), (void **)&r2_);
+		real->QueryInterface(__uuidof(IDXGISwapChain3), (void **)&r3_);
+		real->QueryInterface(__uuidof(IDXGISwapChain4), (void **)&r4_);
+	}
 
-static HRESULT STDMETHODCALLTYPE Hook_Present1(IDXGISwapChain1 *self, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS *pp)
-{
-	bool outer = (t_present_depth++ == 0) && !(flags & DXGI_PRESENT_TEST);
-	if (outer)
-		OnPresentBegin(self);
-	HRESULT hr = ((PFN_Present1)hp_Present1.Orig(self))(self, sync, flags, pp);
-	if (outer)
-		OnPresentEnd(self);
-	t_present_depth--;
-	return hr;
-}
+	// ---- IUnknown
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override
+	{
+		if (!ppv)
+			return E_POINTER;
+		if (riid == __uuidof(IUnknown) || riid == __uuidof(IDXGIObject) || riid == __uuidof(IDXGIDeviceSubObject) ||
+		    riid == __uuidof(IDXGISwapChain) ||
+		    (riid == __uuidof(IDXGISwapChain1) && r1_) || (riid == __uuidof(IDXGISwapChain2) && r2_) ||
+		    (riid == __uuidof(IDXGISwapChain3) && r3_) || (riid == __uuidof(IDXGISwapChain4) && r4_)) {
+			*ppv = static_cast<IDXGISwapChain4 *>(this);
+			AddRef();
+			return S_OK;
+		}
+		return r0_->QueryInterface(riid, ppv); // anything else (vendor interfaces ...) goes straight to the real object
+	}
+	ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+	ULONG STDMETHODCALLTYPE Release() override
+	{
+		ULONG r = --refs_;
+		if (r == 0) {
+			if (r4_) r4_->Release();
+			if (r3_) r3_->Release();
+			if (r2_) r2_->Release();
+			if (r1_) r1_->Release();
+			r0_->Release();
+			delete this;
+		}
+		return r;
+	}
 
-static HRESULT STDMETHODCALLTYPE Hook_ResizeBuffers(IDXGISwapChain *self, UINT count, UINT w, UINT h, DXGI_FORMAT fmt, UINT flags)
-{
-	HRESULT hr = ((PFN_ResizeBuffers)hp_ResizeBuffers.Orig(self))(self, count, w, h, fmt, flags);
-	if (SUCCEEDED(hr)) {
+	// ---- IDXGIObject
+	HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID Name, UINT DataSize, const void *pData) override { return r0_->SetPrivateData(Name, DataSize, pData); }
+	HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID Name, const IUnknown *pUnknown) override { return r0_->SetPrivateDataInterface(Name, pUnknown); }
+	HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID Name, UINT *pDataSize, void *pData) override { return r0_->GetPrivateData(Name, pDataSize, pData); }
+	HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **ppParent) override { return r0_->GetParent(riid, ppParent); }
+
+	// ---- IDXGIDeviceSubObject
+	HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void **ppDevice) override { return r0_->GetDevice(riid, ppDevice); }
+
+	// ---- IDXGISwapChain
+	HRESULT STDMETHODCALLTYPE Present(UINT SyncInterval, UINT Flags) override
+	{
+		bool outer = (t_present_depth++ == 0) && !(Flags & DXGI_PRESENT_TEST) && g_present_enabled;
+		if (outer)
+			OnPresentBegin(r0_);
+		HRESULT hr = r0_->Present(SyncInterval, Flags);
+		if (outer)
+			OnPresentEnd(r0_);
+		t_present_depth--;
+		return hr;
+	}
+	HRESULT STDMETHODCALLTYPE GetBuffer(UINT Buffer, REFIID riid, void **ppSurface) override { return r0_->GetBuffer(Buffer, riid, ppSurface); }
+	HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL Fullscreen, IDXGIOutput *pTarget) override { return r0_->SetFullscreenState(Fullscreen, pTarget); }
+	HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL *pFullscreen, IDXGIOutput **ppTarget) override { return r0_->GetFullscreenState(pFullscreen, ppTarget); }
+	HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC *pDesc) override { return r0_->GetDesc(pDesc); }
+	HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) override
+	{
+		HRESULT hr = r0_->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+		if (SUCCEEDED(hr))
+			RefreshSize();
+		return hr;
+	}
+	HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC *pNewTargetParameters) override { return r0_->ResizeTarget(pNewTargetParameters); }
+	HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput **ppOutput) override { return r0_->GetContainingOutput(ppOutput); }
+	HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS *pStats) override { return r0_->GetFrameStatistics(pStats); }
+	HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT *pLastPresentCount) override { return r0_->GetLastPresentCount(pLastPresentCount); }
+
+	// ---- IDXGISwapChain1
+	HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1 *pDesc) override { return r1_ ? r1_->GetDesc1(pDesc) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pDesc) override { return r1_ ? r1_->GetFullscreenDesc(pDesc) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetHwnd(HWND *pHwnd) override { return r1_ ? r1_->GetHwnd(pHwnd) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID refiid, void **ppUnk) override { return r1_ ? r1_->GetCoreWindow(refiid, ppUnk) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE Present1(UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS *pPresentParameters) override
+	{
+		if (!r1_)
+			return E_NOINTERFACE;
+		bool outer = (t_present_depth++ == 0) && !(PresentFlags & DXGI_PRESENT_TEST) && g_present_enabled;
+		if (outer)
+			OnPresentBegin(r0_);
+		HRESULT hr = r1_->Present1(SyncInterval, PresentFlags, pPresentParameters);
+		if (outer)
+			OnPresentEnd(r0_);
+		t_present_depth--;
+		return hr;
+	}
+	BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override { return r1_ ? r1_->IsTemporaryMonoSupported() : FALSE; }
+	HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput **ppRestrictToOutput) override { return r1_ ? r1_->GetRestrictToOutput(ppRestrictToOutput) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA *pColor) override { return r1_ ? r1_->SetBackgroundColor(pColor) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA *pColor) override { return r1_ ? r1_->GetBackgroundColor(pColor) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION Rotation) override { return r1_ ? r1_->SetRotation(Rotation) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION *pRotation) override { return r1_ ? r1_->GetRotation(pRotation) : E_NOINTERFACE; }
+
+	// ---- IDXGISwapChain2
+	HRESULT STDMETHODCALLTYPE SetSourceSize(UINT Width, UINT Height) override { return r2_ ? r2_->SetSourceSize(Width, Height) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetSourceSize(UINT *pWidth, UINT *pHeight) override { return r2_ ? r2_->GetSourceSize(pWidth, pHeight) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT MaxLatency) override { return r2_ ? r2_->SetMaximumFrameLatency(MaxLatency) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT *pMaxLatency) override { return r2_ ? r2_->GetMaximumFrameLatency(pMaxLatency) : E_NOINTERFACE; }
+	HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override { return r2_ ? r2_->GetFrameLatencyWaitableObject() : nullptr; }
+	HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F *pMatrix) override { return r2_ ? r2_->SetMatrixTransform(pMatrix) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F *pMatrix) override { return r2_ ? r2_->GetMatrixTransform(pMatrix) : E_NOINTERFACE; }
+
+	// ---- IDXGISwapChain3
+	UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override { return r3_ ? r3_->GetCurrentBackBufferIndex() : 0; }
+	HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE ColorSpace, UINT *pColorSpaceSupport) override { return r3_ ? r3_->CheckColorSpaceSupport(ColorSpace, pColorSpaceSupport) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace) override { return r3_ ? r3_->SetColorSpace1(ColorSpace) : E_NOINTERFACE; }
+	HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT Format, UINT SwapChainFlags, const UINT *pCreationNodeMask, IUnknown *const *ppPresentQueue) override
+	{
+		if (!r3_)
+			return E_NOINTERFACE;
+		HRESULT hr = r3_->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
+		if (SUCCEEDED(hr))
+			RefreshSize();
+		return hr;
+	}
+
+	// ---- IDXGISwapChain4
+	HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE Type, UINT Size, void *pMetaData) override { return r4_ ? r4_->SetHDRMetaData(Type, Size, pMetaData) : E_NOINTERFACE; }
+
+private:
+	void RefreshSize()
+	{
 		DXGI_SWAP_CHAIN_DESC d = {};
-		if (SUCCEEDED(self->GetDesc(&d))) {
+		if (SUCCEEDED(r0_->GetDesc(&d))) {
 			g_bb_width = (int)d.BufferDesc.Width;
 			g_bb_height = (int)d.BufferDesc.Height;
 		}
 	}
-	return hr;
+
+	std::atomic<ULONG> refs_{ 1 };
+	IDXGISwapChain *r0_ = nullptr;
+	IDXGISwapChain1 *r1_ = nullptr;
+	IDXGISwapChain2 *r2_ = nullptr;
+	IDXGISwapChain3 *r3_ = nullptr;
+	IDXGISwapChain4 *r4_ = nullptr;
+};
+
+// Only swap chains created for a D3D12 command queue are proxied; everything else (D3D11 chains
+// made by overlays, etc.) is left completely alone.
+static bool IsD3D12Queue(IUnknown *dev)
+{
+	if (!dev)
+		return false;
+	ID3D12CommandQueue *q = nullptr;
+	if (SUCCEEDED(dev->QueryInterface(__uuidof(ID3D12CommandQueue), (void **)&q)) && q) {
+		q->Release();
+		return true;
+	}
+	return false;
 }
 
-static void PatchSwapChain(IUnknown *unk)
-{
-	IDXGISwapChain *sc = nullptr;
-	if (FAILED(unk->QueryInterface(__uuidof(IDXGISwapChain), (void **)&sc)) || !sc)
-		return;
-	void **vt = *(void ***)sc;
-	if (!hp_Present.Has(vt)) {
-		LOG("Hooking IDXGISwapChain vtable %p\n", (void *)vt);
-		hp_Present.Install(vt, g_idx_Present, (void *)&Hook_Present);
-		hp_ResizeBuffers.Install(vt, g_idx_ResizeBuffers, (void *)&Hook_ResizeBuffers);
-		IDXGISwapChain1 *sc1 = nullptr;
-		if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), (void **)&sc1)) && sc1) {
-			hp_Present1.Install(*(void ***)sc1, g_idx_Present1, (void *)&Hook_Present1);
-			sc1->Release();
-		}
-	}
-	sc->Release();
-}
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateSwapChain)(IDXGIFactory *, IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateSwapChainForHwnd)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
+
+static HookPoint hp_CreateSwapChain, hp_CreateSwapChainForHwnd;
 
 static HRESULT STDMETHODCALLTYPE Hook_CreateSwapChain(IDXGIFactory *self, IUnknown *dev, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **pp)
 {
 	HRESULT hr = ((PFN_CreateSwapChain)hp_CreateSwapChain.Orig(self))(self, dev, desc, pp);
-	if (SUCCEEDED(hr) && pp && *pp)
-		PatchSwapChain(*pp);
+	if (SUCCEEDED(hr) && pp && *pp && g_present_enabled && IsD3D12Queue(dev)) {
+		IDXGISwapChain *real = *pp;
+		*pp = new SwapChainProxy(real); // takes over the reference we were given
+		LOG("Swap chain created (CreateSwapChain): real=%p proxy=%p\n", (void *)real, (void *)*pp);
+	}
 	return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE Hook_CreateSwapChainForHwnd(IDXGIFactory2 *self, IUnknown *dev, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1 *desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fs, IDXGIOutput *out, IDXGISwapChain1 **pp)
 {
 	HRESULT hr = ((PFN_CreateSwapChainForHwnd)hp_CreateSwapChainForHwnd.Orig(self))(self, dev, hwnd, desc, fs, out, pp);
-	if (SUCCEEDED(hr) && pp && *pp) {
+	if (SUCCEEDED(hr) && pp && *pp && g_present_enabled && IsD3D12Queue(dev)) {
 		if (hwnd)
 			g_hwnd = hwnd;
-		PatchSwapChain(*pp);
+		IDXGISwapChain1 *real = *pp;
+		SwapChainProxy *proxy = new SwapChainProxy(real);
+		*pp = static_cast<IDXGISwapChain1 *>(proxy);
+		LOG("Swap chain created (CreateSwapChainForHwnd): real=%p proxy=%p\n", (void *)real, (void *)proxy);
 	}
 	return hr;
 }
 
 void HookDXGI()
 {
-	g_idx_Present = VINDEX(IDXGISwapChain, Present, 8);
-	g_idx_ResizeBuffers = VINDEX(IDXGISwapChain, ResizeBuffers, 13);
-	g_idx_Present1 = VINDEX(IDXGISwapChain1, Present1, 22);
+	g_present_enabled = !g_cfg || g_cfg->settings.hook_present;
+	if (!g_present_enabled) {
+		LOG("[DX12] hook_present=0: swap chains are not proxied (no hunting keys, no frame analysis)\n");
+		return;
+	}
 	int idx_csc = VINDEX(IDXGIFactory, CreateSwapChain, 10);
 	int idx_cscfh = VINDEX(IDXGIFactory2, CreateSwapChainForHwnd, 15);
 
@@ -548,7 +674,7 @@ void HookDXGI()
 		f2->Release();
 	}
 	f->Release();
-	LOG("DXGI factory hooks installed\n");
+	LOG("DXGI factory hooks installed (swap chains are proxied, the shared swap chain vtable is NOT patched)\n");
 }
 
 } // namespace mig12

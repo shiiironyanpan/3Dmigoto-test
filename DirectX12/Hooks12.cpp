@@ -30,12 +30,14 @@ static HookPoint hp_CopyBufferRegion, hp_CopyResource, hp_IASetTopology, hp_SetP
 static HookPoint hp_IASetIndexBuffer, hp_IASetVertexBuffers;
 
 struct Indices {
-	int dev_CreateCommandList = 13, dev_CreateGraphicsPSO = 11, dev_CreateComputePSO = 12;
-	int dev_CreateCommittedResource = 28, dev_CreatePlacedResource = 30, dev_CreateReservedResource = 31;
-	int dev2_CreatePipelineState = 48;
-	int dev4_CreateCommandList1 = 52, dev4_CreateCommittedResource1 = 54;
-	int dev8_CreateCommittedResource2 = 70, dev8_CreatePlacedResource1 = 71;
-	int dev10_CreateCommittedResource3 = 77;
+	// Fallbacks only; on MSVC the real index is decoded from the interface at start-up.
+	// (ID3D12Device derives from ID3D12Object, not ID3D12DeviceChild, so its methods start at slot 7.)
+	int dev_CreateCommandList = 12, dev_CreateGraphicsPSO = 10, dev_CreateComputePSO = 11;
+	int dev_CreateCommittedResource = 27, dev_CreatePlacedResource = 29, dev_CreateReservedResource = 30;
+	int dev2_CreatePipelineState = 47;
+	int dev4_CreateCommandList1 = 51, dev4_CreateCommittedResource1 = 53;
+	int dev8_CreateCommittedResource2 = 69, dev8_CreatePlacedResource1 = 70;
+	int dev10_CreateCommittedResource3 = 76;
 	int res_Map = 8, res_Unmap = 9, unk_Release = 2;
 	int cl_Reset = 10, cl_ClearState = 11, cl_DrawInstanced = 12, cl_DrawIndexedInstanced = 13;
 	int cl_Dispatch = 14, cl_CopyBufferRegion = 15, cl_CopyResource = 17, cl_IASetTopology = 20;
@@ -110,8 +112,25 @@ static void RemoveResourceLocked(void *r)
 	g_res.erase(it);
 }
 
+static void InvalidateHashes(ResEx *ri, uint64_t off, uint64_t n)
+{
+	if (ri->hash_cache.empty())
+		return;
+	if (ri->hash_cache.size() > 256) {
+		ri->hash_cache.clear();
+		return;
+	}
+	for (auto it = ri->hash_cache.begin(); it != ri->hash_cache.end();) {
+		if (it->second.off < off + n && off < it->second.off + it->second.size)
+			it = ri->hash_cache.erase(it);
+		else
+			++it;
+	}
+}
+
 static void ShadowWrite(ResEx *ri, uint64_t off, const uint8_t *src, uint64_t n)
 {
+	InvalidateHashes(ri, off, n);
 	uint64_t pos = 0;
 	while (pos < n) {
 		uint64_t abs = off + pos;
@@ -196,10 +215,12 @@ static const uint8_t *MappedPtr(const ResEx *ri, uint64_t off, uint64_t n)
 // =====================================================================================
 // Public data access (hashing / fetching)
 // =====================================================================================
-uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known)
+uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known, bool *stable)
 {
 	if (known)
 		*known = false;
+	if (stable)
+		*stable = false;
 	if (!va || !size)
 		return 0;
 	std::lock_guard<std::mutex> lk(g_mu);
@@ -210,33 +231,78 @@ uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known)
 	if (off + size > ri->size)
 		size = ri->size - off;
 
-	bool dynamic_upload = ri->mapped && !ri->has_shadow;
-	uint32_t ver = ri->version + (dynamic_upload ? (uint32_t)g_frame_no.load() : 0);
+	// Data that lives only in a persistently mapped upload buffer changes whenever the game wants,
+	// so it can only be cached for the current frame and is not "stable" (never recorded by hunting).
+	const bool dynamic_upload = ri->mapped && !ri->has_shadow;
+	uint32_t ver = dynamic_upload ? (uint32_t)g_frame_no.load() : 0;
 	uint64_t key = (off * 0x9E3779B97F4A7C15ULL) ^ (size + 0x7F4A7C15ULL);
 	auto it = ri->hash_cache.find(key);
 	if (it != ri->hash_cache.end() && it->second.off == off && it->second.size == size && it->second.ver == ver) {
 		if (known)
-			*known = true;
+			*known = it->second.known;
+		if (stable)
+			*stable = it->second.known && !dynamic_upload;
 		return it->second.hash;
 	}
 
+	const bool have_shadow = ri->has_shadow && ShadowAny(ri, off, size);
+	const uint8_t *mp = have_shadow ? nullptr : MappedPtr(ri, off, size);
+	auto window_hash = [&](uint32_t crc, uint64_t wo, uint64_t wl) -> uint32_t {
+		if (have_shadow) {
+			// chain through the shadow without copying
+			static const uint8_t zeros[4096] = {};
+			uint64_t pos = 0;
+			while (pos < wl) {
+				uint64_t abs = wo + pos;
+				uint64_t ci = abs / kChunk, co = abs % kChunk;
+				uint64_t len = std::min<uint64_t>(kChunk - co, wl - pos);
+				auto c = ri->sh.chunks.find(ci);
+				if (c != ri->sh.chunks.end()) {
+					crc = crc32c(crc, c->second.data() + co, (size_t)len);
+				} else {
+					uint64_t z = len;
+					while (z) {
+						uint64_t k = std::min<uint64_t>(z, sizeof(zeros));
+						crc = crc32c(crc, zeros, (size_t)k);
+						z -= k;
+					}
+				}
+				pos += len;
+			}
+			return crc;
+		}
+		return crc32c(crc, mp + (wo - off), (size_t)wl);
+	};
+
 	uint32_t h;
-	bool have = false;
-	if (ri->has_shadow && ShadowAny(ri, off, size)) {
-		h = ShadowHash(ri, off, size);
-		have = true;
-	} else if (const uint8_t *p = MappedPtr(ri, off, size)) {
-		h = crc32c(0, p, (size_t)size);
-		have = true;
+	bool have = have_shadow || mp != nullptr;
+	if (have) {
+		const uint64_t thresh = (uint64_t)(g_cfg ? g_cfg->settings.hash_sample_threshold_kb : 4096) * 1024;
+		if (thresh && size > thresh) {
+			// A view this large is almost certainly a whole pooled buffer: hash three 64 KB windows
+			// plus the size instead of megabytes of data on every draw call.
+			const uint64_t W = 65536;
+			h = window_hash(0, off, W);
+			h = window_hash(h, off + size / 2 - W / 2, W);
+			h = window_hash(h, off + size - W, W);
+			h = crc32c(h, &size, sizeof(size));
+			static std::atomic<int> logged{ 0 };
+			if (logged.load() < 10 && ++logged <= 10)
+				LOG("NOTE: a buffer view of %llu KB was hashed from samples (pooled buffer?); meshes sharing that view get the same hash\n", (unsigned long long)(size / 1024));
+		} else {
+			h = window_hash(0, off, size);
+		}
 	} else {
 		uint64_t t[2] = { size, ri->size };
 		h = crc32c(0xDEAD, t, sizeof(t));
 	}
 	if (ri->hash_cache.size() > 8192)
 		ri->hash_cache.clear();
-	ri->hash_cache[key] = ResInfo::HEnt{ off, size, ver, h };
+	ri->hash_cache[key] = ResInfo::HEnt{ off, size, ver, h, have };
 	if (known)
 		*known = have;
+	if (stable)
+		*stable = have && !dynamic_upload;
 	return h;
 }
 
@@ -463,13 +529,16 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 		slots = pi->used_slots;
 
 	uint32_t vbh[16] = {};
-	uint32_t vb_mask = 0, ibh = 0;
+	uint32_t vb_mask = 0, vb_stable_mask = 0, ibh = 0;
+	bool ib_stable = false;
 	static std::atomic<int> unknown_logs{ 0 };
 	for (int s = 0; s < 16; s++) {
 		if (cs->vb_set[s] && (slots >> s & 1) && cs->vb[s].SizeInBytes) {
-			bool known = false;
-			vbh[s] = HashBufferRange(cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes, &known);
+			bool known = false, stable = false;
+			vbh[s] = HashBufferRange(cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes, &known, &stable);
 			vb_mask |= 1u << s;
+			if (stable)
+				vb_stable_mask |= 1u << s;
 			if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
 				LOG("NOTE: vb%d at 0x%llx (%u bytes) has no CPU-side data (GPU generated, untracked or uploaded in an unsupported way); its hash is a size based placeholder\n",
 				    s, (unsigned long long)cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes);
@@ -477,7 +546,7 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 	}
 	if (dp.indexed && cs->ib_set) {
 		bool known = false;
-		ibh = HashBufferRange(cs->ib.BufferLocation, cs->ib.SizeInBytes, &known);
+		ibh = HashBufferRange(cs->ib.BufferLocation, cs->ib.SizeInBytes, &known, &ib_stable);
 		if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
 			LOG("NOTE: index buffer at 0x%llx (%u bytes) has no CPU-side data; its hash is a size based placeholder\n",
 			    (unsigned long long)cs->ib.BufferLocation, cs->ib.SizeInBytes);
@@ -503,7 +572,7 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 	}
 
 	if (hunting) {
-		Hunting_RecordDraw(pi, ibh, dp.indexed && cs->ib_set, vbh, vb_mask);
+		Hunting_RecordDraw(pi, ibh, dp.indexed && cs->ib_set && ib_stable, vbh, vb_stable_mask);
 		if (Hunting_ShouldSkip(pi, ibh, dp.indexed && cs->ib_set, vbh, vb_mask))
 			return false;
 	}
@@ -800,7 +869,8 @@ static void PatchResourceVtable(void **vt)
 		return;
 	hp_ResMap.Install(vt, g_idx.res_Map, (void *)&Hook_ResMap);
 	hp_ResUnmap.Install(vt, g_idx.res_Unmap, (void *)&Hook_ResUnmap);
-	hp_ResRelease.Install(vt, g_idx.unk_Release, (void *)&Hook_ResRelease);
+	if (!g_cfg || g_cfg->settings.hook_release)
+		hp_ResRelease.Install(vt, g_idx.unk_Release, (void *)&Hook_ResRelease);
 }
 
 static void TrackResource(ID3D12Resource *r, const D3D12_RESOURCE_DESC &d, bool cpu_visible)
@@ -1301,21 +1371,21 @@ static void InitIndices()
 	if (g_idx_init)
 		return;
 	g_idx_init = true;
-	g_idx.dev_CreateCommandList = VINDEX(ID3D12Device, CreateCommandList, 13);
-	g_idx.dev_CreateGraphicsPSO = VINDEX(ID3D12Device, CreateGraphicsPipelineState, 11);
-	g_idx.dev_CreateComputePSO = VINDEX(ID3D12Device, CreateComputePipelineState, 12);
-	g_idx.dev_CreateCommittedResource = VINDEX(ID3D12Device, CreateCommittedResource, 28);
-	g_idx.dev_CreatePlacedResource = VINDEX(ID3D12Device, CreatePlacedResource, 30);
-	g_idx.dev_CreateReservedResource = VINDEX(ID3D12Device, CreateReservedResource, 31);
-	g_idx.dev2_CreatePipelineState = VINDEX(ID3D12Device2, CreatePipelineState, 48);
-	g_idx.dev4_CreateCommandList1 = VINDEX(ID3D12Device4, CreateCommandList1, 52);
-	g_idx.dev4_CreateCommittedResource1 = VINDEX(ID3D12Device4, CreateCommittedResource1, 54);
+	g_idx.dev_CreateCommandList = VINDEX(ID3D12Device, CreateCommandList, 12);
+	g_idx.dev_CreateGraphicsPSO = VINDEX(ID3D12Device, CreateGraphicsPipelineState, 10);
+	g_idx.dev_CreateComputePSO = VINDEX(ID3D12Device, CreateComputePipelineState, 11);
+	g_idx.dev_CreateCommittedResource = VINDEX(ID3D12Device, CreateCommittedResource, 27);
+	g_idx.dev_CreatePlacedResource = VINDEX(ID3D12Device, CreatePlacedResource, 29);
+	g_idx.dev_CreateReservedResource = VINDEX(ID3D12Device, CreateReservedResource, 30);
+	g_idx.dev2_CreatePipelineState = VINDEX(ID3D12Device2, CreatePipelineState, 47);
+	g_idx.dev4_CreateCommandList1 = VINDEX(ID3D12Device4, CreateCommandList1, 51);
+	g_idx.dev4_CreateCommittedResource1 = VINDEX(ID3D12Device4, CreateCommittedResource1, 53);
 #ifdef __ID3D12Device8_INTERFACE_DEFINED__
-	g_idx.dev8_CreateCommittedResource2 = VINDEX(ID3D12Device8, CreateCommittedResource2, 70);
-	g_idx.dev8_CreatePlacedResource1 = VINDEX(ID3D12Device8, CreatePlacedResource1, 71);
+	g_idx.dev8_CreateCommittedResource2 = VINDEX(ID3D12Device8, CreateCommittedResource2, 69);
+	g_idx.dev8_CreatePlacedResource1 = VINDEX(ID3D12Device8, CreatePlacedResource1, 70);
 #endif
 #ifdef __ID3D12Device10_INTERFACE_DEFINED__
-	g_idx.dev10_CreateCommittedResource3 = VINDEX(ID3D12Device10, CreateCommittedResource3, 77);
+	g_idx.dev10_CreateCommittedResource3 = VINDEX(ID3D12Device10, CreateCommittedResource3, 76);
 #endif
 	g_idx.res_Map = VINDEX(ID3D12Resource, Map, 8);
 	g_idx.res_Unmap = VINDEX(ID3D12Resource, Unmap, 9);
@@ -1403,25 +1473,33 @@ void HookDevice(IUnknown *unk)
 	if (hp_CreateCommandList.Has(vt))
 		return;
 	LOG("Hooking ID3D12Device vtable %p\n", (void *)vt);
-	hp_CreateCommandList.Install(vt, g_idx.dev_CreateCommandList, (void *)&Hook_CreateCommandList);
-	hp_CreateGraphicsPSO.Install(vt, g_idx.dev_CreateGraphicsPSO, (void *)&Hook_CreateGraphicsPSO);
-	hp_CreateComputePSO.Install(vt, g_idx.dev_CreateComputePSO, (void *)&Hook_CreateComputePSO);
-	hp_CreateCommittedResource.Install(vt, g_idx.dev_CreateCommittedResource, (void *)&Hook_CreateCommittedResource);
-	hp_CreatePlacedResource.Install(vt, g_idx.dev_CreatePlacedResource, (void *)&Hook_CreatePlacedResource);
-	hp_CreateReservedResource.Install(vt, g_idx.dev_CreateReservedResource, (void *)&Hook_CreateReservedResource);
-
-	if (Supports(unk, __uuidof(ID3D12Device2)))
+	const Settings st = g_cfg ? g_cfg->settings : Settings();
+	if (st.hook_commandlists)
+		hp_CreateCommandList.Install(vt, g_idx.dev_CreateCommandList, (void *)&Hook_CreateCommandList);
+	if (st.hook_pipeline) {
+		hp_CreateGraphicsPSO.Install(vt, g_idx.dev_CreateGraphicsPSO, (void *)&Hook_CreateGraphicsPSO);
+		hp_CreateComputePSO.Install(vt, g_idx.dev_CreateComputePSO, (void *)&Hook_CreateComputePSO);
+	}
+	if (st.hook_resources) {
+		hp_CreateCommittedResource.Install(vt, g_idx.dev_CreateCommittedResource, (void *)&Hook_CreateCommittedResource);
+		hp_CreatePlacedResource.Install(vt, g_idx.dev_CreatePlacedResource, (void *)&Hook_CreatePlacedResource);
+		hp_CreateReservedResource.Install(vt, g_idx.dev_CreateReservedResource, (void *)&Hook_CreateReservedResource);
+	}
+	if (st.hook_pipeline && Supports(unk, __uuidof(ID3D12Device2)))
 		hp_CreatePipelineState.Install(vt, g_idx.dev2_CreatePipelineState, (void *)&Hook_CreatePipelineState);
 	if (Supports(unk, __uuidof(ID3D12Device4))) {
-		hp_CreateCommandList1.Install(vt, g_idx.dev4_CreateCommandList1, (void *)&Hook_CreateCommandList1);
-		hp_CreateCommittedResource1.Install(vt, g_idx.dev4_CreateCommittedResource1, (void *)&Hook_CreateCommittedResource1);
+		if (st.hook_commandlists)
+			hp_CreateCommandList1.Install(vt, g_idx.dev4_CreateCommandList1, (void *)&Hook_CreateCommandList1);
+		if (st.hook_resources)
+			hp_CreateCommittedResource1.Install(vt, g_idx.dev4_CreateCommittedResource1, (void *)&Hook_CreateCommittedResource1);
 	}
-	if (Supports(unk, kIID_Device8)) {
+	if (st.hook_resources && Supports(unk, kIID_Device8)) {
 		hp_CreateCommittedResource2.Install(vt, g_idx.dev8_CreateCommittedResource2, (void *)&Hook_CreateCommittedResource2);
 		hp_CreatePlacedResource1.Install(vt, g_idx.dev8_CreatePlacedResource1, (void *)&Hook_CreatePlacedResource1);
 	}
-	if (Supports(unk, kIID_Device10))
+	if (st.hook_resources && Supports(unk, kIID_Device10))
 		hp_CreateCommittedResource3.Install(vt, g_idx.dev10_CreateCommittedResource3, (void *)&Hook_CreateCommittedResource3);
+	LOG("Device hooks: commandlists=%d pipeline=%d resources=%d release=%d\n", st.hook_commandlists, st.hook_pipeline, st.hook_resources, st.hook_release);
 }
 
 } // namespace mig12
