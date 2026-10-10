@@ -44,7 +44,7 @@ struct EvalEnv {
 };
 
 struct Expr {
-	enum Kind { CONST, VAR, BUILTIN, UNARY, BINARY } kind = CONST;
+	enum Kind { CONSTANT, VAR, BUILTIN, UNARY, BINARY } kind = CONSTANT;
 	enum Op { ADD, SUB, MUL, DIV, IDIV, MOD, LT, LE, GT, GE, EQ, NE, AND, OR, NOT, NEG } op = ADD;
 	double c = 0;
 	Var *var = nullptr;

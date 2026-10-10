@@ -40,7 +40,7 @@ enum {
 double Expr::Eval(const EvalEnv &env) const
 {
 	switch (kind) {
-	case CONST:
+	case CONSTANT:
 		return c;
 	case VAR:
 		return var ? var->v : 0;
@@ -284,7 +284,7 @@ struct ExprParser {
 			}
 			i = end - s.c_str();
 			std::unique_ptr<Expr> e(new Expr());
-			e->kind = Expr::CONST;
+			e->kind = Expr::CONSTANT;
 			e->c = v;
 			return e;
 		}
@@ -295,7 +295,7 @@ struct ExprParser {
 			std::string id = lower(s.substr(b, i - b));
 			std::unique_ptr<Expr> e(new Expr());
 			if (id == "true" || id == "false") {
-				e->kind = Expr::CONST;
+				e->kind = Expr::CONSTANT;
 				e->c = id == "true" ? 1 : 0;
 				return e;
 			}
