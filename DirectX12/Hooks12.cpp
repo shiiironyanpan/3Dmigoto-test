@@ -394,13 +394,6 @@ static void CollectTextureHashes(const CmdState *cs, uint32_t *out_hashes, int m
 	}
 }
 
-// For SRV descriptors, we need to read the resource pointer
-			// This is a simplified approach - in practice we'd need to parse the descriptor
-			// For now, we'll use a placeholder approach
-		}
-	}
-}
-
 // =====================================================================================
 // HLSL Compilation (for CustomShader)
 // =====================================================================================

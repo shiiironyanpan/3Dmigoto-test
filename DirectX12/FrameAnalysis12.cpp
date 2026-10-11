@@ -221,12 +221,15 @@ static void DumpTextures()
 		cmd_list->ResourceBarrier(1, &barrier);
 
 		// Copy texture to readback buffer
-		cmd_list->CopyTextureRegion(
-			&(D3D12_TEXTURE_COPY_LOCATION){ readback_buffer, 0, {} },
-			0, 0, 0,
-			&(D3D12_TEXTURE_COPY_LOCATION){ ri->res, 0, {} },
-			nullptr
-		);
+		D3D12_TEXTURE_COPY_LOCATION dst_location = {};
+		dst_location.pResource = readback_buffer;
+		dst_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		dst_location.SubresourceIndex = 0;
+		D3D12_TEXTURE_COPY_LOCATION src_location = {};
+		src_location.pResource = ri->res;
+		src_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		src_location.SubresourceIndex = 0;
+		cmd_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nullptr);
 
 		// Transition back
 		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -272,7 +275,6 @@ static void DumpTextures()
 		}
 
 		readback_buffer->Release();
-		fence->Signal(0); // Reset fence for next texture
 		cmd_list->Reset(alloc, nullptr);
 	}
 
