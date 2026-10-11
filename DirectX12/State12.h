@@ -143,6 +143,13 @@ struct ResInfo {
 	std::unordered_map<uint64_t, HEnt> hash_cache;
 };
 
+struct ResEx : ResInfo {
+	struct Shadow {
+		std::unordered_map<uint64_t, std::vector<uint8_t>> chunks;
+	};
+	Shadow sh;
+};
+
 enum ShaderKind { SK_VS = 0, SK_HS, SK_DS, SK_GS, SK_PS, SK_CS, SK_COUNT };
 extern const char *const kShaderKindName[SK_COUNT];
 
@@ -188,6 +195,9 @@ extern int g_bb_width, g_bb_height;
 
 // Root signature tracking (blob size for descriptor table layout parsing)
 extern std::unordered_map<void *, size_t> g_root_signatures;
+
+// Resource tracking (defined in Hooks12.cpp)
+extern std::unordered_map<void *, std::unique_ptr<ResEx>> g_res;
 
 // ---------------------------------------------------------------------------------
 // Module interfaces

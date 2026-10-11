@@ -70,16 +70,8 @@ static const GUID kIID_Device10 = { 0x517F8718, 0xAA66, 0x49F9, { 0xB0, 0x2B, 0x
 // =====================================================================================
 static const uint64_t kChunk = 65536;
 
-struct Shadow {
-	std::unordered_map<uint64_t, std::vector<uint8_t>> chunks;
-};
-
-struct ResEx : ResInfo {
-	Shadow sh;
-};
-
-static std::unordered_map<void *, std::unique_ptr<ResEx>> g_res;
 static std::map<uint64_t, ResEx *> g_va;
+static std::unordered_map<void *, std::unique_ptr<ResEx>> g_res;
 static std::unordered_map<void *, std::unique_ptr<PsoInfo>> g_pso;
 static std::unordered_map<void *, std::unique_ptr<CmdState>> g_cmd;
 static std::unordered_map<uint64_t, std::vector<uint8_t>> g_shader_bytes;
@@ -388,22 +380,15 @@ static void CollectTextureHashes(const CmdState *cs, uint32_t *out_hashes, int m
 			cpu_handle.ptr += offset * desc_size;
 
 			// For SRV descriptors, we need to read the resource pointer
-			// This is a simplified approach - in practice we'd need to parse the descriptor
-			// For now, we'll use a placeholder approach
-		}
-	}
-}
+						// This is a simplified approach - in practice we'd need to parse the descriptor
+						// For now, we'll use a placeholder approach
+					}
+				}
+			}
 
-// For SRV descriptors, we need to read the resource pointer
-			// This is a simplified approach - in practice we'd need to parse the descriptor
-			// For now, we'll use a placeholder approach
-		}
-	}
-}
-
-// =====================================================================================
-// HLSL Compilation (for CustomShader)
-// =====================================================================================
+			// =====================================================================================
+			// HLSL Compilation (for CustomShader)
+			// =====================================================================================
 
 static bool CompileHLSL(const std::string &hlsl, const std::string &entry_point, const std::string &target, std::vector<uint8_t> &out_bytecode)
 {

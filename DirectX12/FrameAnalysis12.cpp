@@ -22,8 +22,14 @@ static std::atomic<bool> g_fa_requested{ false };
 static std::string g_fa_dir;
 static FILE *g_fa_log = nullptr;
 static uint32_t g_fa_draw = 0;
+static uint32_t g_fa_frame_no = 0;  // Frame number for HOLD mode filename prefix (matching DX11)
 static std::unordered_map<std::string, std::string> g_fa_dedupe;
 static std::set<std::pair<int, uint64_t>> g_fa_shaders;
+
+// Forward declarations
+static void DumpTextures();
+static std::string BuildFAPrefix(uint32_t draw_no);
+static void WriteDDS(const std::string &path, const void *data, size_t size, const D3D12_RESOURCE_DESC &desc);
 
 void FA_Request()
 {
@@ -221,12 +227,22 @@ static void DumpTextures()
 		cmd_list->ResourceBarrier(1, &barrier);
 
 		// Copy texture to readback buffer
-		cmd_list->CopyTextureRegion(
-			&(D3D12_TEXTURE_COPY_LOCATION){ readback_buffer, 0, {} },
-			0, 0, 0,
-			&(D3D12_TEXTURE_COPY_LOCATION){ ri->res, 0, {} },
-			nullptr
-		);
+				D3D12_TEXTURE_COPY_LOCATION dst_location = {};
+				dst_location.pResource = readback_buffer;
+				dst_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+				dst_location.PlacedFootprint = {};
+
+				D3D12_TEXTURE_COPY_LOCATION src_location = {};
+				src_location.pResource = ri->res;
+				src_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+				src_location.SubresourceIndex = 0;
+
+				cmd_list->CopyTextureRegion(
+					&dst_location,
+					0, 0, 0,
+					&src_location,
+					nullptr
+				);
 
 		// Transition back
 		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
