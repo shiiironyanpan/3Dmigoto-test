@@ -51,15 +51,12 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 			ShowWindow(h, SW_HIDE);
 			return 0;
 		}
-		HDC dc = GetDC(h);
-		HGDIOBJ old = SelectObject(dc, g_ov_font);
-		RECT rc = { 0, 0, 900, 0 };
-		DrawTextA(dc, t.c_str(), -1, &rc, DT_CALCRECT | DT_NOPREFIX);
-		SelectObject(dc, old);
-		ReleaseDC(h, dc);
+		// Make overlay cover the entire game client area for proper text positioning
+		RECT client_rc;
+		GetClientRect(g_hwnd, &client_rc);
 		POINT p = { 0, 0 };
 		ClientToScreen(g_hwnd, &p);
-		SetWindowPos(h, HWND_TOPMOST, p.x + 10, p.y + 10, rc.right + 8, rc.bottom + 8, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		SetWindowPos(h, HWND_TOPMOST, p.x, p.y, client_rc.right, client_rc.bottom, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		InvalidateRect(h, nullptr, TRUE);
 		return 0;
 	}
@@ -73,9 +70,49 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 		SetTextColor(dc, RGB(0, 255, 64));
 		HGDIOBJ old = SelectObject(dc, g_ov_font);
 		std::string t = OverlayText();
-		rc.left += 4;
-		rc.top += 4;
-		DrawTextA(dc, t.c_str(), -1, &rc, DT_NOPREFIX);
+		
+		// Split text into lines for proper positioning
+		std::vector<std::string> lines;
+		size_t start = 0;
+		while (start < t.size()) {
+			size_t end = t.find('\n', start);
+			if (end == std::string::npos) end = t.size();
+			lines.push_back(t.substr(start, end - start));
+			start = end + 1;
+		}
+		
+		if (!lines.empty()) {
+			// First line (shader counts) - top center
+			RECT text_rc = { 0, 0, rc.right, 0 };
+			DrawTextA(dc, lines[0].c_str(), -1, &text_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
+			text_rc.left = (rc.right - text_rc.right) / 2;
+			text_rc.top = 10;
+			text_rc.right = text_rc.left + (text_rc.right - text_rc.left);
+			DrawTextA(dc, lines[0].c_str(), -1, &text_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
+			
+			// Middle lines (shader info) - below first line, top center
+			int y = 10 + (text_rc.bottom - text_rc.top) + 2;
+			for (size_t i = 1; i + 1 < lines.size(); i++) {
+				RECT line_rc = { 0, 0, rc.right, 0 };
+				DrawTextA(dc, lines[i].c_str(), -1, &line_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
+				line_rc.left = (rc.right - line_rc.right) / 2;
+				line_rc.top = y;
+				line_rc.right = line_rc.left + (line_rc.right - line_rc.left);
+				DrawTextA(dc, lines[i].c_str(), -1, &line_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
+				y += (line_rc.bottom - line_rc.top) + 2;
+			}
+			
+			// Last line (stereo info) - bottom center
+			if (lines.size() > 1) {
+				RECT line_rc = { 0, 0, rc.right, 0 };
+				DrawTextA(dc, lines.back().c_str(), -1, &line_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
+				line_rc.left = (rc.right - line_rc.right) / 2;
+				line_rc.top = rc.bottom - (line_rc.bottom - line_rc.top) - 10;
+				line_rc.right = line_rc.left + (line_rc.right - line_rc.left);
+				DrawTextA(dc, lines.back().c_str(), -1, &line_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
+			}
+		}
+		
 		SelectObject(dc, old);
 		EndPaint(h, &ps);
 		return 0;
@@ -310,15 +347,57 @@ static void Hunt_UpdateOverlay()
 		Overlay_SetPersistent(g_hunting.load() == 2 ? "Hunting: suspended" : "");
 		return;
 	}
-	std::string t = "Hunting ON";
-	for (int k = 0; k < H_COUNT; k++) {
-		HuntSet &h = g_hunt[k];
+
+	// Build shader count string (top center) - matches DX11 CreateShaderCountString
+	// Display order: VS, PS, CS, GS, DS, HS, VB, IB (matching DX11)
+	// Map to internal enum indices: H_VS=1, H_PS=0, H_CS=5, H_GS=2, H_DS=4, H_HS=3, H_VB=7, H_IB=6
+	std::string count_str;
+	struct DisplayOrder { int idx; const char* name; bool is_main; };
+	DisplayOrder display_order[] = {
+		{ H_VS, "VS", true }, { H_PS, "PS", true }, { H_CS, "CS", true },
+		{ H_GS, "GS", true }, { H_DS, "DS", true }, { H_HS, "HS", true },
+		{ H_VB, "VB", false }, { H_IB, "IB", false }
+	};
+	for (auto &d : display_order) {
+		HuntSet &h = g_hunt[d.idx];
+		if (!d.is_main && h.list.empty() && !h.has_sel)
+			continue; // Skip VB/IB if not visited and not selected
+		if (!count_str.empty())
+			count_str += " ";
+		char b[64];
+		int pos = h.has_sel && h.idx >= 0 ? h.idx + 1 : 0;
+		snprintf(b, sizeof(b), "%s:%d/%zu", d.name, pos, h.list.size());
+		count_str += b;
+	}
+
+	// Build shader info lines (below count string) - matches DX11 DrawShaderInfoLines
+	// Display order: VB, IB, VS, HS, DS, GS, PS, CS (matching DX11 DrawShaderInfoLines)
+	std::string info_lines;
+	DisplayOrder info_order[] = {
+		{ H_VB, "VB" }, { H_IB, "IB" }, { H_VS, "VS" }, { H_HS, "HS" },
+		{ H_DS, "DS" }, { H_GS, "GS" }, { H_PS, "PS" }, { H_CS, "CS" }
+	};
+	for (auto &d : info_order) {
+		HuntSet &h = g_hunt[d.idx];
 		if (h.has_sel && h.idx >= 0) {
+			if (!info_lines.empty())
+				info_lines += "\n";
 			char b[128];
-			snprintf(b, sizeof(b), "\n%s %d/%d %s", kHuntShort[k], h.idx + 1, (int)h.list.size(), HuntHashStr((HuntKind)k, h.selected).c_str());
-			t += b;
+			snprintf(b, sizeof(b), "%s: %s", d.name, HuntHashStr((HuntKind)d.idx, h.selected).c_str());
+			info_lines += b;
 		}
 	}
+
+	// Bottom: stereo info (DX12 doesn't have NVAPI stereo)
+	std::string stereo_str = "Stereo disabled";
+
+	// Combine all parts
+	std::string t = count_str;
+	if (!info_lines.empty()) {
+		t += "\n" + info_lines;
+	}
+	t += "\n" + stereo_str;
+
 	Overlay_SetPersistent(t);
 }
 
@@ -363,13 +442,20 @@ static void PollInput()
 		LOG("Hunting %s\n", g_hunting.load() == 1 ? "enabled" : "suspended");
 	}
 	if (pressed("done_hunting")) {
-		g_hunting = 0;
+		// Like DX11: clear all selections and visited lists, but keep hunting enabled (mode 1)
+		// This allows the user to start fresh without disabling hunting entirely
+		std::lock_guard<std::mutex> hl(g_hunt_mu);
 		for (int k = 0; k < H_COUNT; k++) {
+			g_hunt[k].visited.clear();
+			g_hunt[k].list.clear();
 			g_hunt[k].has_sel = false;
 			g_hunt[k].idx = -1;
+			g_hunt[k].dirty = true;
 		}
-		LOG("Hunting finished\n");
-		Overlay_SetText("Hunting off");
+		// Ensure hunting stays enabled (mode 1) - matches DX11 DoneHunting behavior
+		g_hunting = 1;
+		LOG("Hunting selections cleared\n");
+		Overlay_SetText("Hunting selections cleared");
 	}
 	if (pressed("analyse_frame"))
 		FA_Request();
