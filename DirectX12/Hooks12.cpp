@@ -19,47 +19,6 @@
 namespace mig12 {
 
 // =====================================================================================
-// Function pointer types (must be before any code that uses them)
-// =====================================================================================
-
-typedef HRESULT(STDMETHODCALLTYPE *PFN_Reset)(ID3D12GraphicsCommandList *, ID3D12CommandAllocator *, ID3D12PipelineState *);
-typedef void(STDMETHODCALLTYPE *PFN_ClearState)(ID3D12GraphicsCommandList *, ID3D12PipelineState *);
-typedef void(STDMETHODCALLTYPE *PFN_DrawInstanced)(ID3D12GraphicsCommandList *, UINT, UINT, UINT, UINT);
-typedef void(STDMETHODCALLTYPE *PFN_DrawIndexedInstanced)(ID3D12GraphicsCommandList *, UINT, UINT, UINT, INT, UINT);
-typedef void(STDMETHODCALLTYPE *PFN_Dispatch)(ID3D12GraphicsCommandList *, UINT, UINT, UINT);
-typedef void(STDMETHODCALLTYPE *PFN_ExecuteIndirect)(ID3D12GraphicsCommandList *, ID3D12CommandSignature *, UINT, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64);
-typedef void(STDMETHODCALLTYPE *PFN_ExecuteBundle)(ID3D12GraphicsCommandList *, ID3D12GraphicsCommandList *);
-typedef void(STDMETHODCALLTYPE *PFN_CopyBufferRegion)(ID3D12GraphicsCommandList *, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT64);
-typedef void(STDMETHODCALLTYPE *PFN_CopyResource)(ID3D12GraphicsCommandList *, ID3D12Resource *, ID3D12Resource *);
-typedef void(STDMETHODCALLTYPE *PFN_IASetTopology)(ID3D12GraphicsCommandList *, D3D12_PRIMITIVE_TOPOLOGY);
-typedef void(STDMETHODCALLTYPE *PFN_SetPSO)(ID3D12GraphicsCommandList *, ID3D12PipelineState *);
-typedef void(STDMETHODCALLTYPE *PFN_IASetIndexBuffer)(ID3D12GraphicsCommandList *, const D3D12_INDEX_BUFFER_VIEW *);
-typedef void(STDMETHODCALLTYPE *PFN_IASetVertexBuffers)(ID3D12GraphicsCommandList *, UINT, UINT, const D3D12_VERTEX_BUFFER_VIEW *);
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootDescriptorTable)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
-typedef void(STDMETHODCALLTYPE *PFN_SetDescriptorHeaps)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootSignature)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateShaderResourceView)(ID3D12Device *, ID3D12Resource *, const D3D12_SHADER_RESOURCE_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateUnorderedAccessView)(ID3D12Device *, ID3D12Resource *, ID3D12Resource *, const D3D12_UNORDERED_ACCESS_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRenderTargetView)(ID3D12Device *, ID3D12Resource *, const D3D12_RENDER_TARGET_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateDepthStencilView)(ID3D12Device *, ID3D12Resource *, const D3D12_DEPTH_STENCIL_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRootSignature)(ID3D12Device *, UINT, const void *, SIZE_T, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_Map)(ID3D12Resource *, UINT, const D3D12_RANGE *, void **);
-typedef void(STDMETHODCALLTYPE *PFN_Unmap)(ID3D12Resource *, UINT, const D3D12_RANGE *);
-typedef ULONG(STDMETHODCALLTYPE *PFN_Release)(IUnknown *);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CPR)(ID3D12Device *, ID3D12Heap *, UINT64, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CRR)(ID3D12Device *, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR1)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR2)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CPR1)(ID3D12Device *, ID3D12Heap *, UINT64, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR3)(ID3D12Device *, const D3D12_HEAP_PROPERTies *, D3D12_HEAP_FLAGS, const void *, UINT, const D3D12_CLEAR_VALUE *, void *, UINT, const DXGI_FORMAT *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CGPSO)(ID3D12Device *, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCPSO)(ID3D12Device *, const D3D12_COMPUTE_PIPELINE_STATE_DESC *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CPS)(ID3D12Device *, const D3D12_PIPELINE_STATE_STREAM_DESC *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCL)(ID3D12Device *, UINT, D3D12_COMMAND_LIST_TYPE, ID3D12CommandAllocator *, ID3D12PipelineState *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCL1)(ID3D12Device *, UINT, D3D12_COMMAND_LIST_TYPE, UINT, REFIID, void **);
-
-// =====================================================================================
 // Hook points
 // =====================================================================================
 static HookPoint hp_CreateCommandList, hp_CreateCommandList1;
