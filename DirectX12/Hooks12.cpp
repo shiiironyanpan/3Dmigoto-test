@@ -394,6 +394,20 @@ static void CollectTextureHashes(const CmdState *cs, uint32_t *out_hashes, int m
 	}
 }
 
+// Provide frame analysis with a snapshot of tracked texture resources without exposing
+// the resource-tracking implementation to another translation unit.
+std::vector<ID3D12Resource *> GetFrameAnalysisTextures()
+{
+	std::vector<ID3D12Resource *> textures;
+	std::lock_guard<std::mutex> lk(g_mu);
+	for (const auto &kv : g_res) {
+		const ResEx *ri = kv.second.get();
+		if (ri->has_srv && (ri->mapped || ri->has_shadow) && ri->dim != D3D12_RESOURCE_DIMENSION_BUFFER)
+			textures.push_back(ri->res);
+	}
+	return textures;
+}
+
 // =====================================================================================
 // HLSL Compilation (for CustomShader)
 // =====================================================================================
@@ -906,7 +920,7 @@ static void STDMETHODCALLTYPE Hook_ExecuteIndirect(ID3D12GraphicsCommandList *se
 			Hunting_RecordDraw(cs->pso_info, 0, false, nullptr, 0);
 		}
 	}
-	((PFN_ExecuteIndirect)hp_ExecuteIndirect.Orig(self))(pCommandSignature, MaxCommandCount, pArgumentBuffer, ArgumentBufferOffset, pCountBuffer, CountBufferOffset);
+	((PFN_ExecuteIndirect)hp_ExecuteIndirect.Orig(self))(self, pCommandSignature, MaxCommandCount, pArgumentBuffer, ArgumentBufferOffset, pCountBuffer, CountBufferOffset);
 }
 
 // ExecuteBundle hook - processes bundle command lists
@@ -920,7 +934,7 @@ static void STDMETHODCALLTYPE Hook_ExecuteBundle(ID3D12GraphicsCommandList *self
 			// For now, just call the original
 		}
 	}
-	((PFN_ExecuteBundle)hp_ExecuteBundle.Orig(self))(pCommandList);
+	((PFN_ExecuteBundle)hp_ExecuteBundle.Orig(self))(self, pCommandList);
 }
 
 static void STDMETHODCALLTYPE Hook_SetPSO(ID3D12GraphicsCommandList *self, ID3D12PipelineState *pso)
@@ -984,6 +998,15 @@ static void STDMETHODCALLTYPE Hook_ClearState(ID3D12GraphicsCommandList *self, I
 struct RootSigInfo;
 struct DescriptorTableBinding;
 
+typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootDescriptorTable)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
+typedef void(STDMETHODCALLTYPE *PFN_SetDescriptorHeaps)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
+typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootSignature)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateShaderResourceView)(ID3D12Device *, ID3D12Resource *, const D3D12_SHADER_RESOURCE_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateUnorderedAccessView)(ID3D12Device *, ID3D12Resource *, ID3D12Resource *, const D3D12_UNORDERED_ACCESS_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRenderTargetView)(ID3D12Device *, ID3D12Resource *, const D3D12_RENDER_TARGET_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateDepthStencilView)(ID3D12Device *, ID3D12Resource *, const D3D12_DEPTH_STENCIL_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRootSignature)(ID3D12Device *, UINT, const void *, SIZE_T, REFIID, void **);
+
 static void STDMETHODCALLTYPE Hook_SetGraphicsRootDescriptorTable(ID3D12GraphicsCommandList *self, UINT root_param_idx, D3D12_GPU_DESCRIPTOR_HANDLE base)
 {
 	CmdState *cs = GetCmd(self);
@@ -1010,10 +1033,6 @@ static void STDMETHODCALLTYPE Hook_SetGraphicsRootSignature(ID3D12GraphicsComman
 	cs->root_sig = pRootSignature;
 	((PFN_SetGraphicsRootSignature)hp_SetGraphicsRootSignature.Orig(self))(self, pRootSignature);
 }
-
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootDescriptorTable)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
-typedef void(STDMETHODCALLTYPE *PFN_SetDescriptorHeaps)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootSignature)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
 
 // Device view creation hooks
 static HRESULT STDMETHODCALLTYPE Hook_CreateShaderResourceView(ID3D12Device *self, ID3D12Resource *pResource, const D3D12_SHADER_RESOURCE_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
@@ -1075,12 +1094,6 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateRootSignature(ID3D12Device *self, UI
 	}
 	return hr;
 }
-
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateShaderResourceView)(ID3D12Device *, ID3D12Resource *, const D3D12_SHADER_RESOURCE_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateUnorderedAccessView)(ID3D12Device *, ID3D12Resource *, ID3D12Resource *, const D3D12_UNORDERED_ACCESS_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRenderTargetView)(ID3D12Device *, ID3D12Resource *, const D3D12_RENDER_TARGET_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateDepthStencilView)(ID3D12Device *, ID3D12Resource *, const D3D12_DEPTH_STENCIL_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRootSignature)(ID3D12Device *, UINT, const void *, SIZE_T, REFIID, void **);
 
 // ---- buffer copies: maintain shadow copies --------------------------------------------
 static void OnBufferCopy(ID3D12Resource *dst, UINT64 dst_off, ID3D12Resource *src, UINT64 src_off, UINT64 n)

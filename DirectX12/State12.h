@@ -198,6 +198,7 @@ void HookDevice(IUnknown *device);
 bool FetchBufferBytes(uint64_t va, uint64_t size, std::vector<uint8_t> &out);
 uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known, bool *stable = nullptr);
 bool GetShaderBytes(uint64_t hash, std::vector<uint8_t> &out);
+std::vector<ID3D12Resource *> GetFrameAnalysisTextures();
 bool EnsureGpuResource(CustomResource *r);
 void ReloadConfig();
 bool WriteFileBytes(const std::string &path, const void *data, size_t n);
