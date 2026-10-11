@@ -52,7 +52,7 @@ typedef HRESULT(STDMETHODCALLTYPE *PFN_CRR)(ID3D12Device *, const D3D12_RESOURCE
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR1)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR2)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CPR1)(ID3D12Device *, ID3D12Heap *, UINT64, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR3)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const void *, UINT, const D3D12_CLEAR_VALUE *, void *, UINT, const DXGI_FORMAT *, REFIID, void **);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR3)(ID3D12Device *, const D3D12_HEAP_PROPERTies *, D3D12_HEAP_FLAGS, const void *, UINT, const D3D12_CLEAR_VALUE *, void *, UINT, const DXGI_FORMAT *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CGPSO)(ID3D12Device *, const D3D12_GRAPHICS_PIPELINE_STATE_DESC *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CCPSO)(ID3D12Device *, const D3D12_COMPUTE_PIPELINE_STATE_DESC *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CPS)(ID3D12Device *, const D3D12_PIPELINE_STATE_STREAM_DESC *, REFIID, void **);
@@ -112,7 +112,7 @@ static const GUID kIID_Device10 = { 0x517F8718, 0xAA66, 0x49F9, { 0xB0, 0x2B, 0x
 static const uint64_t kChunk = 65536;
 
 static std::map<uint64_t, ResEx *> g_va;
-std::unordered_map<void *, std::unique_ptr<ResEx>> g_res;
+static std::unordered_map<void *, std::unique_ptr<ResEx>> g_res;
 static std::unordered_map<void *, std::unique_ptr<PsoInfo>> g_pso;
 static std::unordered_map<void *, std::unique_ptr<CmdState>> g_cmd;
 static std::unordered_map<uint64_t, std::vector<uint8_t>> g_shader_bytes;
@@ -939,7 +939,7 @@ static void STDMETHODCALLTYPE Hook_ExecuteIndirect(ID3D12GraphicsCommandList *se
 			Hunting_RecordDraw(cs->pso_info, 0, false, nullptr, 0);
 		}
 	}
-	((PFN_ExecuteIndirect)hp_ExecuteIndirect.Orig(self))(self, pCommandSignature, MaxCommandCount, pArgumentBuffer, ArgumentBufferOffset, pCountBuffer, CountBufferOffset);
+	((PFN_ExecuteIndirect)hp_ExecuteIndirect.Orig(self))(pCommandSignature, MaxCommandCount, pArgumentBuffer, ArgumentBufferOffset, pCountBuffer, CountBufferOffset);
 }
 
 // ExecuteBundle hook - processes bundle command lists
@@ -953,7 +953,7 @@ static void STDMETHODCALLTYPE Hook_ExecuteBundle(ID3D12GraphicsCommandList *self
 			// For now, just call the original
 		}
 	}
-	((PFN_ExecuteBundle)hp_ExecuteBundle.Orig(self))(self, pCommandList);
+	((PFN_ExecuteBundle)hp_ExecuteBundle.Orig(self))(pCommandList);
 }
 
 static void STDMETHODCALLTYPE Hook_SetPSO(ID3D12GraphicsCommandList *self, ID3D12PipelineState *pso)
@@ -1284,6 +1284,7 @@ typedef HRESULT(STDMETHODCALLTYPE *PFN_CRR)(ID3D12Device *, const D3D12_RESOURCE
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR1)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR2)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, void *, REFIID, void **);
 typedef HRESULT(STDMETHODCALLTYPE *PFN_CPR1)(ID3D12Device *, ID3D12Heap *, UINT64, const void *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **);
+typedef HRESULT(STDMETHODCALLTYPE *PFN_CCR3)(ID3D12Device *, const D3D12_HEAP_PROPERTIES *, D3D12_HEAP_FLAGS, const void *, UINT, const D3D12_CLEAR_VALUE *, void *, UINT, const DXGI_FORMAT *, REFIID, void **);
 
 static HRESULT STDMETHODCALLTYPE Hook_CreateCommittedResource(ID3D12Device *self, const D3D12_HEAP_PROPERTIES *hp, D3D12_HEAP_FLAGS f, const D3D12_RESOURCE_DESC *d, D3D12_RESOURCE_STATES s, const D3D12_CLEAR_VALUE *cv, REFIID riid, void **pp)
 {

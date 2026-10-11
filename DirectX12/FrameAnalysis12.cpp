@@ -368,10 +368,13 @@ static void WriteDedup(const std::string &path, const std::string &key, const vo
 		}
 	}
 	if (WriteFileBytes(path, data, n) && dedupe)
-			g_fa_dedupe[key] = path;
-	}
+		g_fa_dedupe[key] = path;
+}
 
-	static std::string ShaderSuffix(const PsoInfo *pso)
+// Frame analysis frame number (for HOLD mode filename prefix, matching DX11)
+static uint32_t g_fa_frame_no = 0;
+
+static std::string ShaderSuffix(const PsoInfo *pso)
 {
 	std::string s;
 	if (!pso)
