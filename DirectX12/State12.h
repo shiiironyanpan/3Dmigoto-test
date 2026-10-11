@@ -130,6 +130,11 @@ struct ResInfo {
 	std::vector<uint8_t> shadow;
 	bool has_shadow = false;
 	uint32_t version = 1;
+	// Texture view tracking
+	bool has_srv = false;
+	bool has_uav = false;
+	bool has_rtv = false;
+	bool has_dsv = false;
 	struct HEnt {
 		uint64_t off, size;
 		uint32_t ver, hash;
@@ -157,6 +162,10 @@ struct CmdState {
 	D3D12_VERTEX_BUFFER_VIEW vb[16] = {};
 	bool vb_set[16] = {};
 	int topology = 0; // D3D_PRIMITIVE_TOPOLOGY
+	// Descriptor heap / root signature tracking for texture overrides
+	ID3D12RootSignature *root_sig = nullptr;
+	std::vector<ID3D12DescriptorHeap *> desc_heaps;
+	D3D12_GPU_DESCRIPTOR_HANDLE desc_tables[32] = {}; // root parameter -> GPU descriptor handle
 };
 
 // ---------------------------------------------------------------------------------
@@ -165,7 +174,8 @@ struct CmdState {
 extern std::mutex g_mu; // protects resource / pso / cmd tables
 extern std::shared_mutex g_cfg_lock; // shared: draw hooks, exclusive: config reload
 extern Config *g_cfg;
-extern ID3D12Device *g_device;
+extern ID3D12Device *g_device; // primary device
+extern std::vector<ID3D12Device *> g_devices; // all hooked devices (for multi-device support)
 extern std::string g_ini_dir;
 extern std::atomic<uint64_t> g_frame_no;
 extern std::atomic<int> g_hunting; // 0 off, 1 on, 2 suspended
@@ -175,6 +185,9 @@ extern std::atomic<int> g_hunting; // 0 off, 1 on, 2 suspended
 extern std::atomic<bool> g_hooks_active;
 extern HWND g_hwnd;
 extern int g_bb_width, g_bb_height;
+
+// Root signature tracking (blob size for descriptor table layout parsing)
+extern std::unordered_map<void *, size_t> g_root_signatures;
 
 // ---------------------------------------------------------------------------------
 // Module interfaces
