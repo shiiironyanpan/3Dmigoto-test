@@ -279,7 +279,7 @@ static void DumpTextures()
 		if (SUCCEEDED(hr) && mapped) {
 			// Write DDS file
 			char hn[64];
-			snprintf(hn, sizeof(hn), "%08x", ri->res->GetGPUVirtualAddress() & 0xFFFFFFFF); // Simple hash from VA
+						snprintf(hn, sizeof(hn), "%08x", (unsigned int)(ri->res->GetGPUVirtualAddress() & 0xFFFFFFFF)); // Simple hash from VA
 			// Use same filename format as draw calls: framedraw-t0=hash.dds
 			std::string prefix = BuildFAPrefix(0); // Frame 0 for textures
 			std::string base = g_fa_dir + "\\" + prefix + "t0=" + hn;
