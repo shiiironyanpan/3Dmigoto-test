@@ -24,12 +24,6 @@ static FILE *g_fa_log = nullptr;
 static uint32_t g_fa_draw = 0;
 static std::unordered_map<std::string, std::string> g_fa_dedupe;
 static std::set<std::pair<int, uint64_t>> g_fa_shaders;
-// Frame analysis frame number (for HOLD mode filename prefix, matching DX11)
-static uint32_t g_fa_frame_no = 0;
-
-static void DumpTextures();
-static void WriteDDS(const std::string &path, const void *data, size_t size, const D3D12_RESOURCE_DESC &desc);
-static std::string BuildFAPrefix(uint32_t draw_no);
 
 void FA_Request()
 {
@@ -120,8 +114,17 @@ static void DumpTextures()
 	if (!g_cfg || !g_cfg->settings.export_shaders || !g_device)
 		return;
 
-	// Collect tracked texture resources through the hook module's interface.
-	std::vector<ID3D12Resource *> textures_to_dump = GetFrameAnalysisTextures();
+	// Collect all tracked resources that have SRV created
+	std::vector<ResEx*> textures_to_dump;
+	{
+		std::lock_guard<std::mutex> lk(g_mu);
+		for (auto &kv : g_res) {
+			ResEx *ri = kv.second.get();
+			if (ri->has_srv && (ri->mapped || ri->has_shadow) && ri->dim != D3D12_RESOURCE_DIMENSION_BUFFER) {
+				textures_to_dump.push_back(ri);
+			}
+		}
+	}
 
 	if (textures_to_dump.empty())
 		return;
@@ -171,11 +174,11 @@ static void DumpTextures()
 	}
 
 	// Record copy commands for all textures
-	for (ID3D12Resource *resource : textures_to_dump) {
-		if (!resource)
+	for (ResEx *ri : textures_to_dump) {
+		if (!ri->res)
 			continue;
 
-		D3D12_RESOURCE_DESC desc = resource->GetDesc();
+		D3D12_RESOURCE_DESC desc = ri->res->GetDesc();
 		if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
 			continue;
 
@@ -211,7 +214,7 @@ static void DumpTextures()
 		D3D12_RESOURCE_BARRIER barrier = {};
 		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		barrier.Transition.pResource = resource;
+		barrier.Transition.pResource = ri->res;
 		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -223,7 +226,7 @@ static void DumpTextures()
 		dst_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 		dst_location.SubresourceIndex = 0;
 		D3D12_TEXTURE_COPY_LOCATION src_location = {};
-		src_location.pResource = resource;
+		src_location.pResource = ri->res;
 		src_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 		src_location.SubresourceIndex = 0;
 		cmd_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nullptr);
@@ -263,7 +266,7 @@ static void DumpTextures()
 		if (SUCCEEDED(hr) && mapped) {
 			// Write DDS file
 			char hn[64];
-			snprintf(hn, sizeof(hn), "%08x", (unsigned)(resource->GetGPUVirtualAddress() & 0xFFFFFFFF)); // Simple hash from VA
+			snprintf(hn, sizeof(hn), "%08x", ri->res->GetGPUVirtualAddress() & 0xFFFFFFFF); // Simple hash from VA
 			// Use same filename format as draw calls: framedraw-t0=hash.dds
 			std::string prefix = BuildFAPrefix(0); // Frame 0 for textures
 			std::string base = g_fa_dir + "\\" + prefix + "t0=" + hn;
@@ -272,7 +275,6 @@ static void DumpTextures()
 		}
 
 		readback_buffer->Release();
-		fence->Signal(0); // Reset fence for next texture
 		cmd_list->Reset(alloc, nullptr);
 	}
 
@@ -354,6 +356,9 @@ static void WriteDedup(const std::string &path, const std::string &key, const vo
 	if (WriteFileBytes(path, data, n) && dedupe)
 		g_fa_dedupe[key] = path;
 }
+
+// Frame analysis frame number (for HOLD mode filename prefix, matching DX11)
+static uint32_t g_fa_frame_no = 0;
 
 static std::string ShaderSuffix(const PsoInfo *pso)
 {
