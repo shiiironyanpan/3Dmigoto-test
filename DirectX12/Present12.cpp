@@ -42,6 +42,20 @@ static std::string OverlayText()
 	return t;
 }
 
+// Draw text with black outline (matching DX11's DrawOutlinedString)
+static void DrawOutlinedText(HDC dc, const char *text, int x, int y, COLORREF color)
+{
+	// Draw outline (black) at 4 offsets
+	SetTextColor(dc, RGB(0, 0, 0));
+	TextOutA(dc, x - 1, y, text, (int)strlen(text));
+	TextOutA(dc, x + 1, y, text, (int)strlen(text));
+	TextOutA(dc, x, y - 1, text, (int)strlen(text));
+	TextOutA(dc, x, y + 1, text, (int)strlen(text));
+	// Draw main text
+	SetTextColor(dc, color);
+	TextOutA(dc, x, y, text, (int)strlen(text));
+}
+
 static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
 	switch (m) {
@@ -65,9 +79,8 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 		HDC dc = BeginPaint(h, &ps);
 		RECT rc;
 		GetClientRect(h, &rc);
-		FillRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+		// NO black background fill - transparent window with only text (like DX11)
 		SetBkMode(dc, TRANSPARENT);
-		SetTextColor(dc, RGB(0, 255, 64));
 		HGDIOBJ old = SelectObject(dc, g_ov_font);
 		std::string t = OverlayText();
 		
@@ -82,34 +95,30 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 		}
 		
 		if (!lines.empty()) {
+			const COLORREF lime_green = RGB(0, 255, 64);
+			
 			// First line (shader counts) - top center
-			RECT text_rc = { 0, 0, rc.right, 0 };
-			DrawTextA(dc, lines[0].c_str(), -1, &text_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
-			text_rc.left = (rc.right - text_rc.right) / 2;
-			text_rc.top = 10;
-			text_rc.right = text_rc.left + (text_rc.right - text_rc.left);
-			DrawTextA(dc, lines[0].c_str(), -1, &text_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
+			SIZE sz;
+			GetTextExtentPoint32A(dc, lines[0].c_str(), (int)lines[0].size(), &sz);
+			int x = (rc.right - sz.cx) / 2;
+			int y = 10;
+			DrawOutlinedText(dc, lines[0].c_str(), x, y, lime_green);
 			
 			// Middle lines (shader info) - below first line, top center
-			int y = 10 + (text_rc.bottom - text_rc.top) + 2;
+			y += sz.cy + 2;
 			for (size_t i = 1; i + 1 < lines.size(); i++) {
-				RECT line_rc = { 0, 0, rc.right, 0 };
-				DrawTextA(dc, lines[i].c_str(), -1, &line_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
-				line_rc.left = (rc.right - line_rc.right) / 2;
-				line_rc.top = y;
-				line_rc.right = line_rc.left + (line_rc.right - line_rc.left);
-				DrawTextA(dc, lines[i].c_str(), -1, &line_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
-				y += (line_rc.bottom - line_rc.top) + 2;
+				GetTextExtentPoint32A(dc, lines[i].c_str(), (int)lines[i].size(), &sz);
+				x = (rc.right - sz.cx) / 2;
+				DrawOutlinedText(dc, lines[i].c_str(), x, y, lime_green);
+				y += sz.cy + 2;
 			}
 			
 			// Last line (stereo info) - bottom center
 			if (lines.size() > 1) {
-				RECT line_rc = { 0, 0, rc.right, 0 };
-				DrawTextA(dc, lines.back().c_str(), -1, &line_rc, DT_CALCRECT | DT_NOPREFIX | DT_CENTER);
-				line_rc.left = (rc.right - line_rc.right) / 2;
-				line_rc.top = rc.bottom - (line_rc.bottom - line_rc.top) - 10;
-				line_rc.right = line_rc.left + (line_rc.right - line_rc.left);
-				DrawTextA(dc, lines.back().c_str(), -1, &line_rc, DT_NOPREFIX | DT_CENTER | DT_SINGLELINE);
+				GetTextExtentPoint32A(dc, lines.back().c_str(), (int)lines.back().size(), &sz);
+				x = (rc.right - sz.cx) / 2;
+				y = rc.bottom - sz.cy - 10;
+				DrawOutlinedText(dc, lines.back().c_str(), x, y, lime_green);
 			}
 		}
 		
@@ -119,8 +128,15 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT m, WPARAM w, LPARAM l)
 	}
 	case WM_NCHITTEST:
 		return HTTRANSPARENT;
-	case WM_ERASEBKGND:
+	case WM_ERASEBKGND: {
+		// Fill with magenta (color key) so it becomes transparent
+		RECT rc;
+		GetClientRect(h, &rc);
+		HBRUSH magenta = CreateSolidBrush(RGB(255, 0, 255));
+		FillRect((HDC)w, &rc, magenta);
+		DeleteObject(magenta);
 		return 1;
+	}
 	}
 	return DefWindowProcW(h, m, w, l);
 }
@@ -132,7 +148,8 @@ static DWORD WINAPI OverlayThread(LPVOID)
 	wc.lpfnWndProc = OverlayProc;
 	wc.hInstance = hi;
 	wc.lpszClassName = L"Migoto12Overlay";
-	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+	// Use NULL background - we handle transparency via layered window color key
+	wc.hbrBackground = nullptr;
 	RegisterClassW(&wc);
 	g_ov_font = CreateFontW(18, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
 		CLIP_DEFAULT_PRECIS, NONANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
@@ -140,7 +157,8 @@ static DWORD WINAPI OverlayThread(LPVOID)
 		L"Migoto12Overlay", L"", WS_POPUP, 0, 0, 10, 10, nullptr, nullptr, hi, nullptr);
 	if (!g_ov)
 		return 0;
-	SetLayeredWindowAttributes(g_ov, RGB(0, 0, 0), 0, LWA_COLORKEY);
+	// Use magenta as color key (transparent color) - won't conflict with black outline or green text
+	SetLayeredWindowAttributes(g_ov, RGB(255, 0, 255), 0, LWA_COLORKEY);
 	SetTimer(g_ov, 1, 100, nullptr);
 	MSG msg;
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

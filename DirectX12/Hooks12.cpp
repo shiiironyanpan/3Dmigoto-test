@@ -528,28 +528,33 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 	if (pi && !pi->layout.empty() && pi->used_slots)
 		slots = pi->used_slots;
 
+	// Only compute buffer hashes when hunting is enabled (mode 1) or frame analysis is active
+	// This avoids the performance cost when hunting=0 (disabled) or hunting=2 (suspended)
 	uint32_t vbh[16] = {};
 	uint32_t vb_mask = 0, vb_stable_mask = 0, ibh = 0;
 	bool ib_stable = false;
 	static std::atomic<int> unknown_logs{ 0 };
-	for (int s = 0; s < 16; s++) {
-		if (cs->vb_set[s] && (slots >> s & 1) && cs->vb[s].SizeInBytes) {
-			bool known = false, stable = false;
-			vbh[s] = HashBufferRange(cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes, &known, &stable);
-			vb_mask |= 1u << s;
-			if (stable)
-				vb_stable_mask |= 1u << s;
-			if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
-				LOG("NOTE: vb%d at 0x%llx (%u bytes) has no CPU-side data (GPU generated, untracked or uploaded in an unsupported way); its hash is a size based placeholder\n",
-				    s, (unsigned long long)cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes);
+	
+	if (hunting || fa) {
+		for (int s = 0; s < 16; s++) {
+			if (cs->vb_set[s] && (slots >> s & 1) && cs->vb[s].SizeInBytes) {
+				bool known = false, stable = false;
+				vbh[s] = HashBufferRange(cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes, &known, &stable);
+				vb_mask |= 1u << s;
+				if (stable)
+					vb_stable_mask |= 1u << s;
+				if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
+					LOG("NOTE: vb%d at 0x%llx (%u bytes) has no CPU-side data (GPU generated, untracked or uploaded in an unsupported way); its hash is a size based placeholder\n",
+					    s, (unsigned long long)cs->vb[s].BufferLocation, cs->vb[s].SizeInBytes);
+			}
 		}
-	}
-	if (dp.indexed && cs->ib_set) {
-		bool known = false;
-		ibh = HashBufferRange(cs->ib.BufferLocation, cs->ib.SizeInBytes, &known, &ib_stable);
-		if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
-			LOG("NOTE: index buffer at 0x%llx (%u bytes) has no CPU-side data; its hash is a size based placeholder\n",
-			    (unsigned long long)cs->ib.BufferLocation, cs->ib.SizeInBytes);
+		if (dp.indexed && cs->ib_set) {
+			bool known = false;
+			ibh = HashBufferRange(cs->ib.BufferLocation, cs->ib.SizeInBytes, &known, &ib_stable);
+			if (!known && unknown_logs.load() < 25 && ++unknown_logs <= 25)
+				LOG("NOTE: index buffer at 0x%llx (%u bytes) has no CPU-side data; its hash is a size based placeholder\n",
+				    (unsigned long long)cs->ib.BufferLocation, cs->ib.SizeInBytes);
+		}
 	}
 
 	if (fa) {
