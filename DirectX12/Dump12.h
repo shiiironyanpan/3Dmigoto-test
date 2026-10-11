@@ -349,7 +349,7 @@ inline std::string dump_vb_txt(const uint8_t *data, size_t size, int slot, uint3
 {
 	std::string s;
 	if (offset)
-		s += str_printf("offset: %u\n", offset);
+		s += str_printf("byte offset: %u\n", offset);
 	s += str_printf("stride: %u\n", stride);
 	if (first || count) {
 		s += str_printf("first vertex: %u\n", first);
