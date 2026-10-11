@@ -169,6 +169,10 @@ extern ID3D12Device *g_device;
 extern std::string g_ini_dir;
 extern std::atomic<uint64_t> g_frame_no;
 extern std::atomic<int> g_hunting; // 0 off, 1 on, 2 suspended
+// Global flag: true when any feature needing command list hooks is active
+// (hunting=1, frame analysis, shader/texture overrides). Checked in draw hooks
+// for minimal overhead when nothing needs them.
+extern std::atomic<bool> g_hooks_active;
 extern HWND g_hwnd;
 extern int g_bb_width, g_bb_height;
 

@@ -670,6 +670,11 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 
 static void STDMETHODCALLTYPE Hook_DrawInstanced(ID3D12GraphicsCommandList *self, UINT vc, UINT ic, UINT sv, UINT si)
 {
+	// Fast path: if no hooks are needed, call original immediately
+	if (!g_hooks_active.load(std::memory_order_relaxed)) {
+		((PFN_DrawInstanced)hp_DrawInstanced.Orig(self))(self, vc, ic, sv, si);
+		return;
+	}
 	CmdState *cs = GetCmd(self);
 	DrawParams dp;
 	dp.indexed = false;
@@ -683,6 +688,11 @@ static void STDMETHODCALLTYPE Hook_DrawInstanced(ID3D12GraphicsCommandList *self
 
 static void STDMETHODCALLTYPE Hook_DrawIndexedInstanced(ID3D12GraphicsCommandList *self, UINT ic, UINT inst, UINT si, INT bv, UINT sinst)
 {
+	// Fast path: if no hooks are needed, call original immediately
+	if (!g_hooks_active.load(std::memory_order_relaxed)) {
+		((PFN_DrawIndexedInstanced)hp_DrawIndexedInstanced.Orig(self))(self, ic, inst, si, bv, sinst);
+		return;
+	}
 	CmdState *cs = GetCmd(self);
 	DrawParams dp;
 	dp.indexed = true;
@@ -1145,8 +1155,19 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateGraphicsPSO(ID3D12Device *self, cons
 	CaptureLayout(d.InputLayout, pi);
 	pi.topology_type = (int)d.PrimitiveTopologyType;
 	HRESULT hr = ((PFN_CGPSO)hp_CreateGraphicsPSO.Orig(self))(self, &d, riid, pp);
-	if (SUCCEEDED(hr) && pp && *pp)
+	if (SUCCEEDED(hr) && pp && *pp) {
 		RegisterPso(*pp, std::move(pi));
+		// Log PSO creation with shader hashes for debugging
+		if (g_cfg && g_cfg->settings.log_pso) {
+			LOG("PSO created: %p VS=%016llx PS=%016llx GS=%016llx HS=%016llx DS=%016llx\n",
+			    (void *)*pp,
+			    (unsigned long long)pi.hash[SK_VS],
+			    (unsigned long long)pi.hash[SK_PS],
+			    (unsigned long long)pi.hash[SK_GS],
+			    (unsigned long long)pi.hash[SK_HS],
+			    (unsigned long long)pi.hash[SK_DS]);
+		}
+	}
 	return hr;
 }
 
@@ -1162,8 +1183,14 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateComputePSO(ID3D12Device *self, const
 		d.CachedPSO.CachedBlobSizeInBytes = 0;
 	}
 	HRESULT hr = ((PFN_CCPSO)hp_CreateComputePSO.Orig(self))(self, &d, riid, pp);
-	if (SUCCEEDED(hr) && pp && *pp)
+	if (SUCCEEDED(hr) && pp && *pp) {
 		RegisterPso(*pp, std::move(pi));
+		if (g_cfg && g_cfg->settings.log_pso) {
+			LOG("Compute PSO created: %p CS=%016llx\n",
+			    (void *)*pp,
+			    (unsigned long long)pi.hash[SK_CS]);
+		}
+	}
 	return hr;
 }
 
@@ -1255,8 +1282,19 @@ static HRESULT STDMETHODCALLTYPE Hook_CreatePipelineState(ID3D12Device *self, co
 	}
 	D3D12_PIPELINE_STATE_STREAM_DESC nd = { copy.size(), copy.data() };
 	HRESULT hr = ((PFN_CPS)hp_CreatePipelineState.Orig(self))(self, &nd, riid, pp);
-	if (SUCCEEDED(hr) && pp && *pp)
+	if (SUCCEEDED(hr) && pp && *pp) {
 		RegisterPso(*pp, std::move(pi));
+		if (g_cfg && g_cfg->settings.log_pso) {
+			LOG("PSO (stream) created: %p VS=%016llx PS=%016llx GS=%016llx HS=%016llx DS=%016llx CS=%016llx\n",
+			    (void *)*pp,
+			    (unsigned long long)pi.hash[SK_VS],
+			    (unsigned long long)pi.hash[SK_PS],
+			    (unsigned long long)pi.hash[SK_GS],
+			    (unsigned long long)pi.hash[SK_HS],
+			    (unsigned long long)pi.hash[SK_DS],
+			    (unsigned long long)pi.hash[SK_CS]);
+		}
+	}
 	return hr;
 }
 

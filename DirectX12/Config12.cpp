@@ -1039,6 +1039,7 @@ void Config::ParseSettings(const IniSection &sec)
 			else if (k == "hook_pipeline") settings.hook_pipeline = atoi(v.c_str()) != 0;
 			else if (k == "hook_commandlists") settings.hook_commandlists = atoi(v.c_str()) != 0;
 			else if (k == "hash_sample_threshold_kb") settings.hash_sample_threshold_kb = atoi(v.c_str());
+			else if (k == "log_pso") settings.log_pso = atoi(v.c_str()) != 0;
 		}
 	}
 	if (sec.lname == "hunting" && !settings.analyse_options.empty()) {}

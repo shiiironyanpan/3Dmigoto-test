@@ -202,6 +202,7 @@ struct Settings {
 	bool overlay = true;
 	bool log_enabled = true;
 	bool debug_log = false;
+	bool log_pso = false; // log PSO creation with shader hashes
 	std::string analyse_options;
 	bool fa_dump_vb = true, fa_dump_ib = true, fa_dump_shaders = true, fa_dedupe = true;
 	// Bisect switches ([DX12] section) to turn individual hook groups off when diagnosing a crash

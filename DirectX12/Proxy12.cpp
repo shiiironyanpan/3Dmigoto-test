@@ -59,6 +59,7 @@ ID3D12Device *g_device = nullptr;
 std::string g_ini_dir;
 std::atomic<uint64_t> g_frame_no{ 0 };
 std::atomic<int> g_hunting{ 0 };
+std::atomic<bool> g_hooks_active{ false };
 HWND g_hwnd = nullptr;
 int g_bb_width = 0, g_bb_height = 0;
 

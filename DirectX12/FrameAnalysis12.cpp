@@ -55,6 +55,7 @@ void FA_StartIfRequested()
 	g_fa_shaders.clear();
 	fprintf(g_fa_log, "3DMigoto DX12 frame analysis\n");
 	g_fa_active = true;
+	g_hooks_active = true; // frame analysis needs hooks
 	LOG("Frame analysis started: %s\n", g_fa_dir.c_str());
 	Overlay_SetText("Frame analysis running...");
 }
@@ -82,6 +83,8 @@ void FA_Stop()
 		}
 	}
 	LOG("Frame analysis finished: %u draw calls written to %s\n", g_fa_draw, g_fa_dir.c_str());
+	// Update hooks active flag: still needed if hunting=1 or overrides present
+	g_hooks_active = (g_hunting.load() == 1) || (g_cfg && g_cfg->HasTextureOverrides());
 	char msg[256];
 	snprintf(msg, sizeof(msg), "Frame analysis done: %u draws", g_fa_draw);
 	Overlay_SetText(msg);

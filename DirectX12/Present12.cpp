@@ -457,6 +457,7 @@ static void PollInput()
 	if (pressed("toggle_hunting")) {
 		int h = g_hunting.load();
 		g_hunting = (h == 1) ? 2 : 1;
+		g_hooks_active = (g_hunting.load() == 1) || g_cfg->HasTextureOverrides() || FA_Active();
 		LOG("Hunting %s\n", g_hunting.load() == 1 ? "enabled" : "suspended");
 	}
 	if (pressed("done_hunting")) {
@@ -472,6 +473,7 @@ static void PollInput()
 		}
 		// Ensure hunting stays enabled (mode 1) - matches DX11 DoneHunting behavior
 		g_hunting = 1;
+		g_hooks_active = true; // hunting=1 means hooks needed
 		LOG("Hunting selections cleared\n");
 		Overlay_SetText("Hunting selections cleared");
 	}
@@ -522,6 +524,8 @@ void OnPresentBegin(IDXGISwapChain *sc)
 			LOG("Swap chain: hwnd=%p %dx%d buffers=%u format=%u\n", (void *)g_hwnd, g_bb_width, g_bb_height, d.BufferCount, (unsigned)d.BufferDesc.Format);
 		}
 		Overlay_Start();
+		// Initialize hooks active flag based on initial config
+		g_hooks_active = (g_hunting.load() == 1) || (g_cfg && g_cfg->HasTextureOverrides()) || FA_Active();
 	}
 
 	if (FA_Active())
@@ -557,6 +561,8 @@ void OnPresentEnd(IDXGISwapChain *)
 	if (g_reload_requested.exchange(false)) {
 		ReloadConfig();
 		Overlay_SetText("Config reloaded");
+		// Update hooks active flag after config reload
+		g_hooks_active = (g_hunting.load() == 1) || (g_cfg && g_cfg->HasTextureOverrides()) || FA_Active();
 	}
 	{
 		std::lock_guard<std::mutex> hl(g_hunt_mu);
