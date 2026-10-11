@@ -1212,11 +1212,6 @@ bool Config::Build(IniFile &ini)
 							warn("[" + sec.name + "] bad " + k + " value: " + l.val);
 						t->has_draw_match = true;
 					}
-				} else if (k.compare(0, 3, "ps-") == 0 || k.compare(0, 3, "vs-") == 0 ||
-				           k.compare(0, 3, "gs-") == 0 || k.compare(0, 3, "hs-") == 0 ||
-				           k.compare(0, 3, "ds-") == 0 || k.compare(0, 3, "cs-") == 0) {
-					// Texture replacement: ps-t0 = ResourceName, vs-t1 = ResourceName, etc.
-					t->texture_replacements[k] = l.val;
 				}
 			}
 			if (!t->has_hash) {
@@ -1250,27 +1245,7 @@ bool Config::Build(IniFile &ini)
 			KeySection *p = k.get();
 			keys.push_back(std::move(k));
 			pending.push_back({ &sec, &p->cl, nullptr, nullptr, p });
-		} else if (starts(ln, "customshader")) {
-			std::unique_ptr<CustomShader> cs(new CustomShader());
-			cs->name = sec.name;
-			for (auto &l : sec.lines) {
-				std::string k = lower(l.key);
-				if (k == "hash") {
-					char *end = nullptr;
-					cs->target_hash = strtoull(l.val.c_str(), &end, 16);
-				} else if (k == "hlsl") {
-					cs->hlsl = l.val;
-				} else if (k == "entry_point") {
-					cs->entry_point = l.val;
-				} else if (k == "target") {
-					cs->target = l.val;
-				}
-			}
-			CustomShader *p = cs.get();
-			custom_shader_store.push_back(std::move(cs));
-			if (p->target_hash != 0)
-				custom_shaders[p->target_hash] = p;
-		} else if (starts(ln, "shaderregex")) {
+		} else if (starts(ln, "customshader") || starts(ln, "shaderregex")) {
 			warn("[" + sec.name + "] is not supported by the DX12 build (ignored)");
 		}
 	}

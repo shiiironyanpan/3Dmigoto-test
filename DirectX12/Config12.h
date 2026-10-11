@@ -143,8 +143,6 @@ struct TextureOverride {
 	FuzzyMatch m_first_vertex, m_first_index, m_first_instance, m_vertex_count, m_index_count, m_instance_count;
 	int override_vertex_count = -1;
 	int override_byte_stride = -1;
-	// Texture replacement: map from "ps-t0", "vs-t1", etc. to resource name
-	std::map<std::string, std::string> texture_replacements;
 	CommandList cl;
 	bool matches_draw(const DrawCtx &d) const;
 };
@@ -154,18 +152,6 @@ struct ShaderOverride {
 	uint64_t hash = 0;
 	bool has_hash = false;
 	CommandList cl;
-};
-
-// Custom shader: compile HLSL at runtime and replace shader by hash
-struct CustomShader {
-	std::string name;
-	uint64_t target_hash = 0; // hash of shader to replace
-	std::string hlsl; // HLSL source code
-	std::string entry_point = "main";
-	std::string target = "ps_6_0"; // shader model
-	std::vector<uint8_t> compiled_bytecode; // compiled DXIL
-	bool compiled = false;
-	bool compile_failed = false;
 };
 
 // ---- keys -----------------------------------------------------------------------
@@ -240,8 +226,6 @@ public:
 	std::unordered_map<uint32_t, std::vector<TextureOverride *>> texture_overrides;
 	std::vector<std::unique_ptr<ShaderOverride>> shader_override_store;
 	std::unordered_map<uint64_t, std::vector<ShaderOverride *>> shader_overrides;
-	std::vector<std::unique_ptr<CustomShader>> custom_shader_store;
-	std::unordered_map<uint64_t, CustomShader *> custom_shaders;
 	std::vector<std::unique_ptr<KeySection>> keys;
 	CommandList present;
 	std::map<std::string, KeyCombo> hunt_keys;

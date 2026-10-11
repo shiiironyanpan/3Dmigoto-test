@@ -5,14 +5,9 @@
 // DX11 tool, so XXMITools / the 3DMigoto Blender importer can read them:
 //   000123-vb0=<hash>-vs=<hash>-ps=<hash>.txt / .buf
 //   000123-ib=<hash>-vs=<hash>-ps=<hash>.txt / .buf
-//   000123-t0=<hash>-vs=<hash>-ps=<hash>.dds / .txt (texture dumps)
 #include "State12.h"
 
 #include <cstdio>
-#include <d3d12.h>
-#include <wrl/client.h>
-
-using Microsoft::WRL::ComPtr;
 
 namespace mig12 {
 
@@ -56,7 +51,6 @@ void FA_StartIfRequested()
 		return;
 	}
 	g_fa_draw = 0;
-	g_fa_frame_no++;  // Increment frame number for HOLD mode (matching DX11)
 	g_fa_dedupe.clear();
 	g_fa_shaders.clear();
 	fprintf(g_fa_log, "3DMigoto DX12 frame analysis\n");
@@ -88,256 +82,12 @@ void FA_Stop()
 			}
 		}
 	}
-	// Also dump shaders alongside draw calls (DX11 format)
-	for (auto &p : g_fa_shaders) {
-		std::vector<uint8_t> bytes;
-		if (GetShaderBytes(p.second, bytes)) {
-			char hn[32];
-			snprintf(hn, sizeof(hn), "%016llx", (unsigned long long)p.second);
-			// Use frame 0 prefix for shader dumps (they're not per-draw)
-			std::string base = g_fa_dir + "\\000000-shader-" + kShaderKindName[p.first] + "=" + hn;
-			WriteFileBytes(base + ".bin", bytes.data(), bytes.size());
-		}
-	}
-	// Dump textures that were bound during the frame
-	DumpTextures();
 	LOG("Frame analysis finished: %u draw calls written to %s\n", g_fa_draw, g_fa_dir.c_str());
 	// Update hooks active flag: still needed if hunting=1 or overrides present
 	g_hooks_active = (g_hunting.load() == 1) || (g_cfg && g_cfg->HasTextureOverrides());
 	char msg[256];
 	snprintf(msg, sizeof(msg), "Frame analysis done: %u draws", g_fa_draw);
 	Overlay_SetText(msg);
-}
-
-static void DumpTextures()
-{
-	if (!g_cfg || !g_cfg->settings.export_shaders || !g_device)
-		return;
-
-	// Collect all tracked resources that have SRV created
-	std::vector<ResEx*> textures_to_dump;
-	{
-		std::lock_guard<std::mutex> lk(g_mu);
-		for (auto &kv : g_res) {
-			ResEx *ri = kv.second.get();
-			if (ri->has_srv && (ri->mapped || ri->has_shadow) && ri->dim != D3D12_RESOURCE_DIMENSION_BUFFER) {
-				textures_to_dump.push_back(ri);
-			}
-		}
-	}
-
-	if (textures_to_dump.empty())
-		return;
-
-	LOG("Dumping %zu textures...\n", textures_to_dump.size());
-
-	// Create a copy command queue for texture readback
-	ID3D12CommandQueue *copy_queue = nullptr;
-	D3D12_COMMAND_QUEUE_DESC queue_desc = {};
-	queue_desc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-	queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-	HRESULT hr = g_device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&copy_queue));
-	if (FAILED(hr) || !copy_queue) {
-		LOG("Failed to create copy queue for texture dump (hr=0x%08x)\n", (unsigned)hr);
-		return;
-	}
-
-	// Create a fence for synchronization
-	ID3D12Fence *fence = nullptr;
-	hr = g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-	if (FAILED(hr) || !fence) {
-		LOG("Failed to create fence for texture dump (hr=0x%08x)\n", (unsigned)hr);
-		copy_queue->Release();
-		return;
-	}
-	HANDLE fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-
-	// Create a command allocator and list for copy commands
-	ID3D12CommandAllocator *alloc = nullptr;
-	ID3D12GraphicsCommandList *cmd_list = nullptr;
-	hr = g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&alloc));
-	if (FAILED(hr)) {
-		LOG("Failed to create command allocator for texture dump\n");
-		CloseHandle(fence_event);
-		fence->Release();
-		copy_queue->Release();
-		return;
-	}
-	hr = g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, alloc, nullptr, IID_PPV_ARGS(&cmd_list));
-	if (FAILED(hr)) {
-		LOG("Failed to create command list for texture dump\n");
-		alloc->Release();
-		CloseHandle(fence_event);
-		fence->Release();
-		copy_queue->Release();
-		return;
-	}
-
-	// Record copy commands for all textures
-	for (ResEx *ri : textures_to_dump) {
-		if (!ri->res)
-			continue;
-
-		D3D12_RESOURCE_DESC desc = ri->res->GetDesc();
-		if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-			continue;
-
-		// Calculate required readback buffer size
-		UINT64 readback_size = 0;
-		g_device->GetCopyableFootprints(&desc, 0, desc.MipLevels, 0, nullptr, nullptr, nullptr, &readback_size);
-
-		// Create readback buffer
-		D3D12_HEAP_PROPERTIES readback_heap = {};
-		readback_heap.Type = D3D12_HEAP_TYPE_READBACK;
-		readback_heap.CreationNodeMask = 1;
-		readback_heap.VisibleNodeMask = 1;
-
-		D3D12_RESOURCE_DESC readback_desc = {};
-		readback_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-		readback_desc.Width = readback_size;
-		readback_desc.Height = 1;
-		readback_desc.DepthOrArraySize = 1;
-		readback_desc.MipLevels = 1;
-		readback_desc.Format = DXGI_FORMAT_UNKNOWN;
-		readback_desc.SampleDesc.Count = 1;
-		readback_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-		ID3D12Resource *readback_buffer = nullptr;
-		hr = g_device->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &readback_desc,
-			D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_buffer));
-		if (FAILED(hr) || !readback_buffer) {
-			LOG("Failed to create readback buffer for texture (hr=0x%08x)\n", (unsigned)hr);
-			continue;
-		}
-
-		// Transition texture to COPY_SOURCE
-		D3D12_RESOURCE_BARRIER barrier = {};
-		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		barrier.Transition.pResource = ri->res;
-		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		cmd_list->ResourceBarrier(1, &barrier);
-
-		// Copy texture to readback buffer
-		cmd_list->CopyTextureRegion(
-			&(D3D12_TEXTURE_COPY_LOCATION){ readback_buffer, 0, {} },
-			0, 0, 0,
-			&(D3D12_TEXTURE_COPY_LOCATION){ ri->res, 0, {} },
-			nullptr
-		);
-
-		// Transition back
-		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-		cmd_list->ResourceBarrier(1, &barrier);
-
-		// Store readback buffer for later processing
-		// We'll process after executing the command list
-		// For simplicity, we'll execute and wait after each texture
-		hr = cmd_list->Close();
-		if (FAILED(hr)) {
-			readback_buffer->Release();
-			continue;
-		}
-
-		// Execute the copy command
-		ID3D12CommandList *lists[] = { cmd_list };
-		copy_queue->ExecuteCommandLists(1, lists);
-
-		// Signal fence and wait
-		UINT64 fence_value = 1;
-		hr = copy_queue->Signal(fence, fence_value);
-		if (SUCCEEDED(hr)) {
-			hr = fence->SetEventOnCompletion(fence_value, fence_event);
-			if (SUCCEEDED(hr)) {
-				WaitForSingleObject(fence_event, INFINITE);
-			}
-		}
-
-		// Map readback buffer and write DDS
-		void *mapped = nullptr;
-		D3D12_RANGE read_range = { 0, readback_size };
-		hr = readback_buffer->Map(0, &read_range, &mapped);
-		if (SUCCEEDED(hr) && mapped) {
-			// Write DDS file
-			char hn[64];
-			snprintf(hn, sizeof(hn), "%08x", ri->res->GetGPUVirtualAddress() & 0xFFFFFFFF); // Simple hash from VA
-			// Use same filename format as draw calls: framedraw-t0=hash.dds
-			std::string prefix = BuildFAPrefix(0); // Frame 0 for textures
-			std::string base = g_fa_dir + "\\" + prefix + "t0=" + hn;
-			WriteDDS(base + ".dds", mapped, readback_size, desc);
-			readback_buffer->Unmap(0, nullptr);
-		}
-
-		readback_buffer->Release();
-		fence->Signal(0); // Reset fence for next texture
-		cmd_list->Reset(alloc, nullptr);
-	}
-
-	// Cleanup
-	cmd_list->Release();
-	alloc->Release();
-	CloseHandle(fence_event);
-	fence->Release();
-	copy_queue->Release();
-}
-
-static void WriteDDS(const std::string &path, const void *data, size_t size, const D3D12_RESOURCE_DESC &desc)
-{
-	// Simple DDS header writer
-	// For a complete implementation, we'd need to properly format the DDS header
-	// with the correct DXGI format, dimensions, mip levels, etc.
-	// This is a placeholder that writes raw data with a minimal DDS header
-	FILE *f = fopen(path.c_str(), "wb");
-	if (!f)
-		return;
-
-	// Minimal DDS header (128 bytes)
-	struct DDSHeader {
-		uint32_t dwMagic;
-		uint32_t dwSize;
-		uint32_t dwFlags;
-		uint32_t dwHeight;
-		uint32_t dwWidth;
-		uint32_t dwPitchOrLinearSize;
-		uint32_t dwDepth;
-		uint32_t dwMipMapCount;
-		uint32_t dwReserved1[11];
-		struct {
-			uint32_t dwSize;
-			uint32_t dwFlags;
-			uint32_t dwFourCC;
-			uint32_t dwRGBBitCount;
-			uint32_t dwRBitMask;
-			uint32_t dwGBitMask;
-			uint32_t dwBBitMask;
-			uint32_t dwABitMask;
-		} ddspf;
-		uint32_t dwCaps;
-		uint32_t dwCaps2;
-		uint32_t dwCaps3;
-		uint32_t dwCaps4;
-		uint32_t dwReserved2;
-	} hdr = {};
-
-	hdr.dwMagic = 0x20534444; // "DDS "
-	hdr.dwSize = 124;
-	hdr.dwFlags = 0x1 | 0x2 | 0x4 | 0x1000; // DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT
-	hdr.dwHeight = (uint32_t)desc.Height;
-	hdr.dwWidth = (uint32_t)desc.Width;
-	hdr.dwDepth = (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D) ? (uint32_t)desc.DepthOrArraySize : 1;
-	hdr.dwMipMapCount = desc.MipLevels;
-	hdr.dwPitchOrLinearSize = (uint32_t)size;
-	hdr.ddspf.dwSize = 32;
-	hdr.ddspf.dwFlags = 0x4; // DDPF_FOURCC
-	hdr.ddspf.dwFourCC = 0; // Would need proper format mapping
-	hdr.dwCaps = 0x1000; // DDSCAPS_TEXTURE
-
-	fwrite(&hdr, sizeof(hdr), 1, f);
-	fwrite(data, size, 1, f);
-	fclose(f);
 }
 
 // Writes (or hard links when identical content was already written) a file.
@@ -355,9 +105,6 @@ static void WriteDedup(const std::string &path, const std::string &key, const vo
 		g_fa_dedupe[key] = path;
 }
 
-// Frame analysis frame number (for HOLD mode filename prefix, matching DX11)
-static uint32_t g_fa_frame_no = 0;
-
 static std::string ShaderSuffix(const PsoInfo *pso)
 {
 	std::string s;
@@ -373,22 +120,6 @@ static std::string ShaderSuffix(const PsoInfo *pso)
 		g_fa_shaders.insert(std::make_pair(k, pso->hash[k]));
 	}
 	return s;
-}
-
-// Build filename prefix matching DX11 format: [frame.]drawcall-
-// When HOLD is enabled (fa_dedupe), prefix with frame number like DX11
-static std::string BuildFAPrefix(uint32_t draw_no)
-{
-	std::string prefix;
-	if (g_cfg && g_cfg->settings.fa_dedupe) {
-		char b[32];
-		snprintf(b, sizeof(b), "%u.", g_fa_frame_no);
-		prefix = b;
-	}
-	char b[32];
-	snprintf(b, sizeof(b), "%06i-", (int)draw_no);
-	prefix += b;
-	return prefix;
 }
 
 static int EffectiveTopology(const FADraw &d)
@@ -477,9 +208,8 @@ void FA_OnDraw(const FADraw &d)
 			if ((int)e.slot == s && e.slot_class == 1)
 				per_inst = true;
 
-		std::string prefix = BuildFAPrefix(n);
 		char base[160];
-		snprintf(base, sizeof(base), "%s\\%svb%d=%08x%s", g_fa_dir.c_str(), prefix.c_str(), s, d.vb_hash[s], suffix.c_str());
+		snprintf(base, sizeof(base), "%s\\%06u-vb%d=%08x%s", g_fa_dir.c_str(), n, s, d.vb_hash[s], suffix.c_str());
 		char key[200];
 		snprintf(key, sizeof(key), "vb|%08x|%llu", d.vb_hash[s], (unsigned long long)bytes.size());
 		WriteDedup(std::string(base) + ".buf", key, bytes.data(), bytes.size());
@@ -503,9 +233,8 @@ void FA_OnDraw(const FADraw &d)
 
 	// ---- index buffer -----------------------------------------------------------------------------
 	if (d.indexed && d.ib_set && have_ib) {
-		std::string prefix = BuildFAPrefix(n);
 		char base[160];
-		snprintf(base, sizeof(base), "%s\\%sib=%08x%s", g_fa_dir.c_str(), prefix.c_str(), d.ib_hash, suffix.c_str());
+		snprintf(base, sizeof(base), "%s\\%06u-ib=%08x%s", g_fa_dir.c_str(), n, d.ib_hash, suffix.c_str());
 		char key[200];
 		snprintf(key, sizeof(key), "ib|%08x|%llu", d.ib_hash, (unsigned long long)ib_bytes.size());
 		WriteDedup(std::string(base) + ".buf", key, ib_bytes.data(), ib_bytes.size());

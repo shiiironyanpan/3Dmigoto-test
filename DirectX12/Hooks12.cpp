@@ -13,8 +13,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
-#include <d3d12.h>
-#include <d3dcompiler.h>
 
 namespace mig12 {
 
@@ -30,12 +28,6 @@ static HookPoint hp_ResMap, hp_ResUnmap, hp_ResRelease;
 static HookPoint hp_Reset, hp_ClearState, hp_DrawInstanced, hp_DrawIndexedInstanced, hp_Dispatch;
 static HookPoint hp_CopyBufferRegion, hp_CopyResource, hp_IASetTopology, hp_SetPSO;
 static HookPoint hp_IASetIndexBuffer, hp_IASetVertexBuffers;
-// Texture / descriptor heap / root signature hooks
-static HookPoint hp_SetGraphicsRootDescriptorTable, hp_SetDescriptorHeaps, hp_SetGraphicsRootSignature;
-static HookPoint hp_CreateShaderResourceView, hp_CreateUnorderedAccessView, hp_CreateRenderTargetView, hp_CreateDepthStencilView;
-static HookPoint hp_CreateRootSignature;
-// ExecuteIndirect / Bundle hooks
-static HookPoint hp_ExecuteIndirect, hp_ExecuteBundle;
 
 struct Indices {
 	// Fallbacks only; on MSVC the real index is decoded from the interface at start-up.
@@ -46,17 +38,10 @@ struct Indices {
 	int dev4_CreateCommandList1 = 51, dev4_CreateCommittedResource1 = 53;
 	int dev8_CreateCommittedResource2 = 69, dev8_CreatePlacedResource1 = 70;
 	int dev10_CreateCommittedResource3 = 76;
-	// Device view creation
-	int dev_CreateShaderResourceView = 34, dev_CreateUnorderedAccessView = 35, dev_CreateRenderTargetView = 36, dev_CreateDepthStencilView = 37;
-	int dev_CreateRootSignature = 26;
 	int res_Map = 8, res_Unmap = 9, unk_Release = 2;
 	int cl_Reset = 10, cl_ClearState = 11, cl_DrawInstanced = 12, cl_DrawIndexedInstanced = 13;
 	int cl_Dispatch = 14, cl_CopyBufferRegion = 15, cl_CopyResource = 17, cl_IASetTopology = 20;
 	int cl_SetPSO = 25, cl_IASetIndexBuffer = 43, cl_IASetVertexBuffers = 44;
-	// Command list descriptor / root signature
-	int cl_SetGraphicsRootDescriptorTable = 31, cl_SetDescriptorHeaps = 29, cl_SetGraphicsRootSignature = 27;
-	// ExecuteIndirect / Bundle
-	int cl_ExecuteIndirect = 40, cl_ExecuteBundle = 41;
 };
 static Indices g_idx;
 static bool g_idx_init = false;
@@ -321,140 +306,6 @@ uint32_t HashBufferRange(uint64_t va, uint64_t size, bool *known, bool *stable)
 	return h;
 }
 
-// =====================================================================================
-// Texture hashing
-// =====================================================================================
-
-// Compute a hash for a texture resource from its shadow copy or mapped data.
-// Returns 0 if the texture data is not available.
-static uint32_t HashTextureResource(ResEx *ri)
-{
-	if (!ri || !ri->has_shadow && !ri->mapped)
-		return 0;
-
-	// For textures, we hash the entire resource (all mips, all array slices)
-	// using the shadow copy if available, otherwise mapped data.
-	// This is a simplified version - in practice we'd need to handle different
-	// texture dimensions, formats, mip levels, etc.
-	
-	// For now, use the same approach as buffers but for the full resource size
-	if (ri->has_shadow && !ri->sh.chunks.empty()) {
-		static const uint8_t zeros[4096] = {};
-		uint32_t crc = 0;
-		for (auto &kv : ri->sh.chunks) {
-			const std::vector<uint8_t> &chunk = kv.second;
-			crc = crc32c(crc, chunk.data(), chunk.size());
-		}
-		return crc;
-	} else if (ri->mapped && ri->size > 0) {
-		return crc32c(0, ri->mapped, (size_t)ri->size);
-	}
-	return 0;
-}
-
-// Collect texture hashes from bound SRV descriptor tables
-static void CollectTextureHashes(const CmdState *cs, uint32_t *out_hashes, int max_hashes, int *out_count)
-{
-	*out_count = 0;
-	if (!cs->root_sig || cs->desc_heaps.empty())
-		return;
-
-	// For each bound descriptor heap
-	for (ID3D12DescriptorHeap *heap : cs->desc_heaps) {
-		D3D12_DESCRIPTOR_HEAP_DESC heap_desc = heap->GetDesc();
-		if (heap_desc.Type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-			continue;
-
-		// Get the descriptor size
-		UINT desc_size = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-		
-		// For each root parameter that has a descriptor table bound
-		for (int rp = 0; rp < 32 && *out_count < max_hashes; rp++) {
-			D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = cs->desc_tables[rp];
-			if (gpu_handle.ptr == 0)
-				continue;
-
-			// Check if this GPU handle belongs to our heap
-			D3D12_GPU_DESCRIPTOR_HANDLE heap_start = heap->GetGPUDescriptorHandleForHeapStart();
-			if (gpu_handle.ptr < heap_start.ptr)
-				continue;
-			
-			UINT64 offset = (gpu_handle.ptr - heap_start.ptr) / desc_size;
-			if (offset >= heap_desc.NumDescriptors)
-				continue;
-
-			// Read the descriptor CPU-side to get the resource
-			D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = heap->GetCPUDescriptorHandleForHeapStart();
-			cpu_handle.ptr += offset * desc_size;
-
-			// For SRV descriptors, we need to read the resource pointer
-			// This is a simplified approach - in practice we'd need to parse the descriptor
-			// For now, we'll use a placeholder approach
-		}
-	}
-}
-
-// For SRV descriptors, we need to read the resource pointer
-			// This is a simplified approach - in practice we'd need to parse the descriptor
-			// For now, we'll use a placeholder approach
-		}
-	}
-}
-
-// =====================================================================================
-// HLSL Compilation (for CustomShader)
-// =====================================================================================
-
-static bool CompileHLSL(const std::string &hlsl, const std::string &entry_point, const std::string &target, std::vector<uint8_t> &out_bytecode)
-{
-	if (!g_device)
-		return false;
-
-	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-	flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-	ID3DBlob *blob = nullptr;
-	ID3DBlob *errors = nullptr;
-	HRESULT hr = D3DCompile(hlsl.c_str(), hlsl.size(), nullptr, nullptr, nullptr, entry_point.c_str(), target.c_str(), flags, 0, &blob, &errors);
-
-	if (FAILED(hr)) {
-		if (errors) {
-			LOG("HLSL compilation failed: %s\n", (char *)errors->GetBufferPointer());
-			errors->Release();
-		} else {
-			LOG("HLSL compilation failed (hr=0x%08x)\n", (unsigned)hr);
-		}
-		if (blob)
-			blob->Release();
-		return false;
-	}
-
-	out_bytecode.assign((const uint8_t *)blob->GetBufferPointer(), (const uint8_t *)blob->GetBufferPointer() + blob->GetBufferSize());
-	blob->Release();
-	if (errors)
-		errors->Release();
-	return true;
-}
-
-// Compile all custom shaders at config load
-static void CompileCustomShaders(Config *cfg)
-{
-	for (auto &cs_ptr : cfg->custom_shader_store) {
-		CustomShader *cs = cs_ptr.get();
-		if (cs->compiled || cs->compile_failed || cs->hlsl.empty())
-			continue;
-		if (CompileHLSL(cs->hlsl, cs->entry_point, cs->target, cs->compiled_bytecode)) {
-			cs->compiled = true;
-			LOG("Compiled custom shader %s (target hash: %016llx): %zu bytes\n", cs->name.c_str(), (unsigned long long)cs->target_hash, cs->compiled_bytecode.size());
-		} else {
-			cs->compile_failed = true;
-			LOG("Failed to compile custom shader %s\n", cs->name.c_str());
-		}
-	}
-}
-
 bool FetchBufferBytes(uint64_t va, uint64_t size, std::vector<uint8_t> &out)
 {
 	if (!va || !size)
@@ -529,8 +380,6 @@ typedef void(STDMETHODCALLTYPE *PFN_ClearState)(ID3D12GraphicsCommandList *, ID3
 typedef void(STDMETHODCALLTYPE *PFN_DrawInstanced)(ID3D12GraphicsCommandList *, UINT, UINT, UINT, UINT);
 typedef void(STDMETHODCALLTYPE *PFN_DrawIndexedInstanced)(ID3D12GraphicsCommandList *, UINT, UINT, UINT, INT, UINT);
 typedef void(STDMETHODCALLTYPE *PFN_Dispatch)(ID3D12GraphicsCommandList *, UINT, UINT, UINT);
-typedef void(STDMETHODCALLTYPE *PFN_ExecuteIndirect)(ID3D12GraphicsCommandList *, ID3D12CommandSignature *, UINT, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64);
-typedef void(STDMETHODCALLTYPE *PFN_ExecuteBundle)(ID3D12GraphicsCommandList *, ID3D12GraphicsCommandList *);
 typedef void(STDMETHODCALLTYPE *PFN_CopyBufferRegion)(ID3D12GraphicsCommandList *, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT64);
 typedef void(STDMETHODCALLTYPE *PFN_CopyResource)(ID3D12GraphicsCommandList *, ID3D12Resource *, ID3D12Resource *);
 typedef void(STDMETHODCALLTYPE *PFN_IASetTopology)(ID3D12GraphicsCommandList *, D3D12_PRIMITIVE_TOPOLOGY);
@@ -708,24 +557,6 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 		}
 	}
 
-	// Compute texture hashes from bound SRVs for texture overrides
-	uint32_t tex_hashes[32] = {};
-	int tex_hash_count = 0;
-	if (ovr && cs->root_sig && !cs->desc_heaps.empty()) {
-		// Simple approach: iterate through tracked resources that have SRVs
-		// and compute their hashes. This is a placeholder - full descriptor
-		// parsing would require reading GPU descriptor heaps CPU-side.
-		std::lock_guard<std::mutex> lk(g_mu);
-		for (auto &kv : g_res) {
-			ResEx *ri = kv.second.get();
-			if (ri->has_srv && ri->size > 0 && tex_hash_count < 32) {
-				uint32_t h = HashTextureResource(ri);
-				if (h != 0)
-					tex_hashes[tex_hash_count++] = h;
-			}
-		}
-	}
-
 	if (fa) {
 		FADraw fd;
 		fd.indexed = dp.indexed;
@@ -808,21 +639,6 @@ static bool ProcessDraw(ID3D12GraphicsCommandList *cl, CmdState *cs, DrawParams 
 	if (dp.indexed && cs->ib_set)
 		run_to(ibh, -1);
 
-	// Texture override matching
-	for (int i = 0; i < tex_hash_count; i++) {
-		const std::vector<TextureOverride *> *list = cfg->FindTextureOverrides(tex_hashes[i]);
-		if (!list)
-			continue;
-		for (TextureOverride *to : *list) {
-			if (!to->matches_draw(dc))
-				continue;
-			st.post = false;
-			to->cl.Run(st);
-			posts.push_back(&to->cl);
-			changed_anything = true;
-		}
-	}
-
 	if (pi) {
 		for (int k = 0; k < SK_COUNT; k++) {
 			if (!pi->hash[k])
@@ -900,36 +716,6 @@ static void STDMETHODCALLTYPE Hook_Dispatch(ID3D12GraphicsCommandList *self, UIN
 	((PFN_Dispatch)hp_Dispatch.Orig(self))(self, x, y, z);
 }
 
-// ExecuteIndirect hook - processes indirect draw commands
-static void STDMETHODCALLTYPE Hook_ExecuteIndirect(ID3D12GraphicsCommandList *self, ID3D12CommandSignature *pCommandSignature, UINT MaxCommandCount, ID3D12Resource *pArgumentBuffer, UINT64 ArgumentBufferOffset, ID3D12Resource *pCountBuffer, UINT64 CountBufferOffset)
-{
-	CmdState *cs = GetCmd(self);
-	// For ExecuteIndirect, we need to process each indirect draw command
-	// This is a simplified version - full implementation would parse the argument buffer
-	// and apply overrides per-draw
-	if (g_hooks_active.load(std::memory_order_relaxed)) {
-		// Record hunting for indirect draws if enabled
-		if (g_hunting.load() == 1 && cs->pso_info) {
-			Hunting_RecordDraw(cs->pso_info, 0, false, nullptr, 0);
-		}
-	}
-	((PFN_ExecuteIndirect)hp_ExecuteIndirect.Orig(self))(pCommandSignature, MaxCommandCount, pArgumentBuffer, ArgumentBufferOffset, pCountBuffer, CountBufferOffset);
-}
-
-// ExecuteBundle hook - processes bundle command lists
-static void STDMETHODCALLTYPE Hook_ExecuteBundle(ID3D12GraphicsCommandList *self, ID3D12GraphicsCommandList *pCommandList)
-{
-	CmdState *cs = GetCmd(self);
-	if (g_hooks_active.load(std::memory_order_relaxed)) {
-		// Record hunting for bundle execution if enabled
-		if (g_hunting.load() == 1) {
-			// The bundle's PSO info would be in the bundle's command list state
-			// For now, just call the original
-		}
-	}
-	((PFN_ExecuteBundle)hp_ExecuteBundle.Orig(self))(pCommandList);
-}
-
 static void STDMETHODCALLTYPE Hook_SetPSO(ID3D12GraphicsCommandList *self, ID3D12PipelineState *pso)
 {
 	CmdState *cs = GetCmd(self);
@@ -982,112 +768,6 @@ static void STDMETHODCALLTYPE Hook_ClearState(ID3D12GraphicsCommandList *self, I
 	((PFN_ClearState)hp_ClearState.Orig(self))(self, pso);
 	ResetCmdState(GetCmd(self), pso);
 }
-
-// =====================================================================================
-// Texture / Descriptor Heap / Root Signature hooks
-// =====================================================================================
-
-// Forward declarations
-struct RootSigInfo;
-struct DescriptorTableBinding;
-
-static void STDMETHODCALLTYPE Hook_SetGraphicsRootDescriptorTable(ID3D12GraphicsCommandList *self, UINT root_param_idx, D3D12_GPU_DESCRIPTOR_HANDLE base)
-{
-	CmdState *cs = GetCmd(self);
-	if (root_param_idx < 32) {
-		cs->desc_tables[root_param_idx] = base;
-	}
-	((PFN_SetGraphicsRootDescriptorTable)hp_SetGraphicsRootDescriptorTable.Orig(self))(self, root_param_idx, base);
-}
-
-static void STDMETHODCALLTYPE Hook_SetDescriptorHeaps(ID3D12GraphicsCommandList *self, UINT num, ID3D12DescriptorHeap *const *ppHeaps)
-{
-	CmdState *cs = GetCmd(self);
-	cs->desc_heaps.clear();
-	for (UINT i = 0; i < num && i < 16; i++) {
-		if (ppHeaps[i])
-			cs->desc_heaps.push_back(ppHeaps[i]);
-	}
-	((PFN_SetDescriptorHeaps)hp_SetDescriptorHeaps.Orig(self))(self, num, ppHeaps);
-}
-
-static void STDMETHODCALLTYPE Hook_SetGraphicsRootSignature(ID3D12GraphicsCommandList *self, ID3D12RootSignature *pRootSignature)
-{
-	CmdState *cs = GetCmd(self);
-	cs->root_sig = pRootSignature;
-	((PFN_SetGraphicsRootSignature)hp_SetGraphicsRootSignature.Orig(self))(self, pRootSignature);
-}
-
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootDescriptorTable)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
-typedef void(STDMETHODCALLTYPE *PFN_SetDescriptorHeaps)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
-typedef void(STDMETHODCALLTYPE *PFN_SetGraphicsRootSignature)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
-
-// Device view creation hooks
-static HRESULT STDMETHODCALLTYPE Hook_CreateShaderResourceView(ID3D12Device *self, ID3D12Resource *pResource, const D3D12_SHADER_RESOURCE_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
-{
-	// Track SRV creation for texture hashing
-	if (pResource) {
-		std::lock_guard<std::mutex> lk(g_mu);
-		auto it = g_res.find(pResource);
-		if (it != g_res.end()) {
-			it->second->has_srv = true;
-		}
-	}
-	return ((PFN_CreateShaderResourceView)hp_CreateShaderResourceView.Orig(self))(self, pResource, pDesc, DestDescriptor);
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_CreateUnorderedAccessView(ID3D12Device *self, ID3D12Resource *pResource, ID3D12Resource *pCounterResource, const D3D12_UNORDERED_ACCESS_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
-{
-	if (pResource) {
-		std::lock_guard<std::mutex> lk(g_mu);
-		auto it = g_res.find(pResource);
-		if (it != g_res.end()) {
-			it->second->has_uav = true;
-		}
-	}
-	return ((PFN_CreateUnorderedAccessView)hp_CreateUnorderedAccessView.Orig(self))(self, pResource, pCounterResource, pDesc, DestDescriptor);
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_CreateRenderTargetView(ID3D12Device *self, ID3D12Resource *pResource, const D3D12_RENDER_TARGET_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
-{
-	if (pResource) {
-		std::lock_guard<std::mutex> lk(g_mu);
-		auto it = g_res.find(pResource);
-		if (it != g_res.end()) {
-			it->second->has_rtv = true;
-		}
-	}
-	return ((PFN_CreateRenderTargetView)hp_CreateRenderTargetView.Orig(self))(self, pResource, pDesc, DestDescriptor);
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_CreateDepthStencilView(ID3D12Device *self, ID3D12Resource *pResource, const D3D12_DEPTH_STENCIL_VIEW_DESC *pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor)
-{
-	if (pResource) {
-		std::lock_guard<std::mutex> lk(g_mu);
-		auto it = g_res.find(pResource);
-		if (it != g_res.end()) {
-			it->second->has_dsv = true;
-		}
-	}
-	return ((PFN_CreateDepthStencilView)hp_CreateDepthStencilView.Orig(self))(self, pResource, pDesc, DestDescriptor);
-}
-
-static HRESULT STDMETHODCALLTYPE Hook_CreateRootSignature(ID3D12Device *self, UINT nodeMask, const void *pBlobWithRootSignature, SIZE_T lengthInBytes, REFIID riid, void **ppvRootSignature)
-{
-	HRESULT hr = ((PFN_CreateRootSignature)hp_CreateRootSignature.Orig(self))(self, nodeMask, pBlobWithRootSignature, lengthInBytes, riid, ppvRootSignature);
-	if (SUCCEEDED(hr) && ppvRootSignature && *ppvRootSignature) {
-		// Track root signature for descriptor table layout
-		std::lock_guard<std::mutex> lk(g_mu);
-		g_root_signatures[*ppvRootSignature] = lengthInBytes; // Store blob size for now
-	}
-	return hr;
-}
-
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateShaderResourceView)(ID3D12Device *, ID3D12Resource *, const D3D12_SHADER_RESOURCE_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateUnorderedAccessView)(ID3D12Device *, ID3D12Resource *, ID3D12Resource *, const D3D12_UNORDERED_ACCESS_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRenderTargetView)(ID3D12Device *, ID3D12Resource *, const D3D12_RENDER_TARGET_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateDepthStencilView)(ID3D12Device *, ID3D12Resource *, const D3D12_DEPTH_STENCIL_VIEW_DESC *, D3D12_CPU_DESCRIPTOR_HANDLE);
-typedef HRESULT(STDMETHODCALLTYPE *PFN_CreateRootSignature)(ID3D12Device *, UINT, const void *, SIZE_T, REFIID, void **);
 
 // ---- buffer copies: maintain shadow copies --------------------------------------------
 static void OnBufferCopy(ID3D12Resource *dst, UINT64 dst_off, ID3D12Resource *src, UINT64 src_off, UINT64 n)
@@ -1415,16 +1095,6 @@ static bool ProcessShader(int kind, D3D12_SHADER_BYTECODE &sc, PsoInfo &pi, std:
 			WriteFileBytes(g_ini_dir + "\\ShaderCache\\" + HexName(h) + "-" + kShaderKindName[kind] + ".bin", sc.pShaderBytecode, sc.BytecodeLength);
 		}
 	}
-	// Check for custom shader replacement (compiled HLSL)
-	if (g_cfg) {
-		auto it = g_cfg->custom_shaders.find(h);
-		if (it != g_cfg->custom_shaders.end() && it->second->compiled && !it->second->compiled_bytecode.empty()) {
-			sc.pShaderBytecode = it->second->compiled_bytecode.data();
-			sc.BytecodeLength = it->second->compiled_bytecode.size();
-			LOG("Replaced shader %s (hash %016llx) with custom shader %s\n", kShaderKindName[kind], (unsigned long long)h, it->second->name.c_str());
-			return true;
-		}
-	}
 	if (const std::vector<uint8_t> *rep = FindReplacement(kind, h)) {
 		sc.pShaderBytecode = rep->data();
 		sc.BytecodeLength = rep->size();
@@ -1646,13 +1316,6 @@ static void PatchCommandListVtable(void **vt)
 	hp_SetPSO.Install(vt, g_idx.cl_SetPSO, (void *)&Hook_SetPSO);
 	hp_IASetIndexBuffer.Install(vt, g_idx.cl_IASetIndexBuffer, (void *)&Hook_IASetIndexBuffer);
 	hp_IASetVertexBuffers.Install(vt, g_idx.cl_IASetVertexBuffers, (void *)&Hook_IASetVertexBuffers);
-	// Texture / descriptor heap / root signature hooks
-	hp_SetGraphicsRootDescriptorTable.Install(vt, g_idx.cl_SetGraphicsRootDescriptorTable, (void *)&Hook_SetGraphicsRootDescriptorTable);
-	hp_SetDescriptorHeaps.Install(vt, g_idx.cl_SetDescriptorHeaps, (void *)&Hook_SetDescriptorHeaps);
-	hp_SetGraphicsRootSignature.Install(vt, g_idx.cl_SetGraphicsRootSignature, (void *)&Hook_SetGraphicsRootSignature);
-	// ExecuteIndirect / Bundle hooks
-	hp_ExecuteIndirect.Install(vt, g_idx.cl_ExecuteIndirect, (void *)&Hook_ExecuteIndirect);
-	hp_ExecuteBundle.Install(vt, g_idx.cl_ExecuteBundle, (void *)&Hook_ExecuteBundle);
 	LOG("Hooked command list vtable %p\n", (void *)vt);
 }
 
@@ -1824,8 +1487,6 @@ void InitHooksOnce(const std::string &ini_dir)
 	std::string ini = ini_dir + "\\d3dx.ini";
 	if (!g_cfg->Load(ini))
 		LOG("WARNING: could not read %s - running with defaults (no mods will be applied)\n", ini.c_str());
-	// Compile custom shaders after config load
-	CompileCustomShaders(g_cfg);
 	RefreshConfigFlags();
 	LOG("Hunting=%d shadow_budget_mb=%d export_shaders=%d\n", g_cfg->settings.hunting,
 	    g_cfg->settings.shadow_budget_mb, g_cfg->settings.export_shaders ? 1 : 0);
@@ -1849,16 +1510,6 @@ void HookDevice(IUnknown *unk)
 		return;
 	if (!g_device)
 		g_device = dev; // raw pointer, deliberately not kept alive
-	
-	// Track all devices for multi-device support
-	{
-		std::lock_guard<std::mutex> lk(g_mu);
-		if (std::find(g_devices.begin(), g_devices.end(), dev) == g_devices.end()) {
-			g_devices.push_back(dev);
-			LOG("Tracked device %p (total: %zu)\n", (void *)dev, g_devices.size());
-		}
-	}
-	
 	void **vt = *(void ***)dev;
 	dev->Release();
 
@@ -1876,14 +1527,6 @@ void HookDevice(IUnknown *unk)
 		hp_CreateCommittedResource.Install(vt, g_idx.dev_CreateCommittedResource, (void *)&Hook_CreateCommittedResource);
 		hp_CreatePlacedResource.Install(vt, g_idx.dev_CreatePlacedResource, (void *)&Hook_CreatePlacedResource);
 		hp_CreateReservedResource.Install(vt, g_idx.dev_CreateReservedResource, (void *)&Hook_CreateReservedResource);
-	}
-	// Texture / view creation hooks (for texture override support)
-	if (st.hook_resources) {
-		hp_CreateShaderResourceView.Install(vt, g_idx.dev_CreateShaderResourceView, (void *)&Hook_CreateShaderResourceView);
-		hp_CreateUnorderedAccessView.Install(vt, g_idx.dev_CreateUnorderedAccessView, (void *)&Hook_CreateUnorderedAccessView);
-		hp_CreateRenderTargetView.Install(vt, g_idx.dev_CreateRenderTargetView, (void *)&Hook_CreateRenderTargetView);
-		hp_CreateDepthStencilView.Install(vt, g_idx.dev_CreateDepthStencilView, (void *)&Hook_CreateDepthStencilView);
-		hp_CreateRootSignature.Install(vt, g_idx.dev_CreateRootSignature, (void *)&Hook_CreateRootSignature);
 	}
 	if (st.hook_pipeline && Supports(unk, __uuidof(ID3D12Device2)))
 		hp_CreatePipelineState.Install(vt, g_idx.dev2_CreatePipelineState, (void *)&Hook_CreatePipelineState);

@@ -56,14 +56,12 @@ std::mutex g_mu;
 std::shared_mutex g_cfg_lock;
 Config *g_cfg = nullptr;
 ID3D12Device *g_device = nullptr;
-std::vector<ID3D12Device *> g_devices;
 std::string g_ini_dir;
 std::atomic<uint64_t> g_frame_no{ 0 };
 std::atomic<int> g_hunting{ 0 };
 std::atomic<bool> g_hooks_active{ false };
 HWND g_hwnd = nullptr;
 int g_bb_width = 0, g_bb_height = 0;
-std::unordered_map<void *, size_t> g_root_signatures;
 
 const char *const kShaderKindName[SK_COUNT] = { "vs", "hs", "ds", "gs", "ps", "cs" };
 
